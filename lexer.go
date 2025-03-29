@@ -12,14 +12,18 @@ const (
 	AndKeyword     Keyword = "and"
 	BeginKeyword   Keyword = "begin"
 	CreateKeyword  Keyword = "create"
-	TableKeyword   Keyword = "table"
+	DeleteKeyword  Keyword = "delete"
 	FromKeyword    Keyword = "from"
-	SelectKeyword  Keyword = "select"
 	InsertKeyword  Keyword = "insert"
-	ValuesKeyword  Keyword = "values"
 	IntegerKeyword Keyword = "int"
 	IntoKeyword    Keyword = "into"
+	SelectKeyword  Keyword = "select"
+	SetKeyword     Keyword = "set"
+	TableKeyword   Keyword = "table"
 	TextKeyword    Keyword = "text"
+	UpdateKeyword  Keyword = "update"
+	ValuesKeyword  Keyword = "values"
+	WhereKeyword   Keyword = "where"
 )
 
 type TokenType uint
@@ -58,28 +62,40 @@ func lexKeyword(source string, pos int) (*Token, int, bool) {
 	keywords := []Keyword{
 		BeginKeyword, SelectKeyword, AndKeyword, FromKeyword,
 		IntoKeyword, IntegerKeyword, TextKeyword, InsertKeyword, TableKeyword,
-		CreateKeyword, ValuesKeyword,
+		CreateKeyword, ValuesKeyword, WhereKeyword, SetKeyword, UpdateKeyword, DeleteKeyword,
 	}
 	c := pos
-	r := 0
-	v := ""
+	var builder strings.Builder
 
 	for c < len(source) && unicode.IsLetter(rune(source[c])) {
-		v = v + string(source[c])
-		c = c + 1
+		builder.WriteByte(source[c])
+		c++
 	}
 
+	value := builder.String()
 	for _, k := range keywords {
-		if strings.ToLower(v) == string(k) {
+		if strings.ToLower(value) == string(k) {
 			return &Token{
 				Type:  KeywordType,
-				Value: strings.ToLower(v),
+				Value: strings.ToLower(value),
 				Pos: Position{
-					Line: r,
+					Line: 0,
 					Col:  pos,
 				},
-			}, pos + len(string(v)), true
+			}, c, true
 		}
+	}
+
+	// If not a keyword, treat it as an identifier
+	if len(value) > 0 {
+		return &Token{
+			Type:  IdentifierType,
+			Value: value,
+			Pos: Position{
+				Line: 0,
+				Col:  pos,
+			},
+		}, c, false
 	}
 
 	return nil, pos, false
@@ -87,67 +103,38 @@ func lexKeyword(source string, pos int) (*Token, int, bool) {
 
 func lexSymbol(source string, pos int) (*Token, int, bool) {
 	symbols := []Symbol{LeftParenSymbol, RightParenSymbol, AsteriskSymbol, CommaSymbol, SemicolonSymbol, ConcatSymbol}
-	c := pos
-	r := 0
-	v := ""
-	for c < len(source) {
-		v = v + string(source[c])
-		for _, k := range symbols {
-			if strings.ToLower(v) == string(k) || source[c] == '\n' {
-				return &Token{
-					Type:  SymbolType,
-					Value: strings.TrimSuffix(v, "\n"),
-					Pos: Position{
-						Line: r,
-						Col:  pos,
-					},
-				}, pos + len(string(v)), true
-			}
+	for _, s := range symbols {
+		if strings.HasPrefix(source[pos:], string(s)) {
+			return &Token{
+				Type:  SymbolType,
+				Value: string(s),
+				Pos: Position{
+					Line: 0,
+					Col:  pos,
+				},
+			}, pos + len(s), true
 		}
-		if string(source[c]) == " " {
-			break
-		}
-		c = c + 1
 	}
-
 	return nil, pos, false
 }
 
 func lexIdentifier(source string, pos int) (*Token, int, bool) {
 	c := pos
-	r := 0
+	var builder strings.Builder
 
-	v := ""
-	if unicode.IsLetter(rune(source[c])) {
-		isValidChar := true
-		for c < len(source) {
-			if (source[c] == '\n' || source[c] == ' ' || string(source[c]) == string(SemicolonSymbol)) && isValidChar {
-				return &Token{
-					Type:  IdentifierType,
-					Value: strings.ToLower(v),
-					Pos: Position{
-						Line: r,
-						Col:  pos,
-					},
-				}, pos + len(string(v)), true
-			}
-			if !(unicode.IsLetter(rune(source[c])) || unicode.IsDigit(rune(source[c])) || source[c] == '_' || source[c] == '$') {
-				isValidChar = false
-				return nil, pos, false
-			}
-			if isValidChar {
-				v = v + string(source[c])
-			}
-			c = c + 1
+	if unicode.IsLetter(rune(source[c])) || source[c] == '_' {
+		for c < len(source) && (unicode.IsLetter(rune(source[c])) || unicode.IsDigit(rune(source[c])) || source[c] == '_') {
+			builder.WriteByte(source[c])
+			c++
 		}
 		return &Token{
 			Type:  IdentifierType,
-			Value: v,
+			Value: builder.String(),
 			Pos: Position{
-				Line: r,
+				Line: 0,
 				Col:  pos,
 			},
-		}, pos + len(string(v)), true
+		}, c, true
 	}
 
 	return nil, pos, false
@@ -155,26 +142,23 @@ func lexIdentifier(source string, pos int) (*Token, int, bool) {
 
 func lexString(source string, pos int) (*Token, int, bool) {
 	c := pos
-	r := 0
-
-	v := ""
+	var builder strings.Builder
 
 	if source[c] == '\'' {
-		c = c + 1
-		for c < len(source) {
-			if source[c] == '\'' {
-				return &Token{
-					Type:  StringType,
-					Value: v,
-					Pos: Position{
-						Line: r,
-						Col:  pos,
-					},
-				}, pos + len(string(v)) + 2, true
-			}
-
-			v = v + string(source[c])
-			c = c + 1
+		c++
+		for c < len(source) && source[c] != '\'' {
+			builder.WriteByte(source[c])
+			c++
+		}
+		if c < len(source) && source[c] == '\'' {
+			return &Token{
+				Type:  StringType,
+				Value: builder.String(),
+				Pos: Position{
+					Line: 0,
+					Col:  pos,
+				},
+			}, c + 1, true
 		}
 	}
 
@@ -183,41 +167,63 @@ func lexString(source string, pos int) (*Token, int, bool) {
 
 func lexNumber(source string, pos int) (*Token, int, bool) {
 	c := pos
-	r := 0
-	v := ""
+	var builder strings.Builder
 
-	if unicode.IsDigit(rune(source[c])) {
-		for c < len(source) {
-			if source[c] == ' ' || source[c] == '\n' || source[c] == ',' || source[c] == ')' {
-				return &Token{
-					Type:  NumberType,
-					Value: v,
-					Pos: Position{
-						Line: r,
-						Col:  pos,
-					},
-				}, pos + len(string(v)), true
-			}
+	// Check if the first character is a digit
+	if c < len(source) && !unicode.IsDigit(rune(source[c])) {
+		return nil, pos, false
+	}
 
-			if unicode.IsDigit(rune(source[c])) || source[c] == '.' || source[c] == 'e' {
-				v = v + string(source[c])
-			} else {
-				return nil, pos, false
-			}
-			c = c + 1
+	// Parse the integer part
+	for c < len(source) && unicode.IsDigit(rune(source[c])) {
+		builder.WriteByte(source[c])
+		c++
+	}
+
+	// Parse the fractional part if present
+	if c < len(source) && source[c] == '.' {
+		builder.WriteByte(source[c])
+		c++
+		for c < len(source) && unicode.IsDigit(rune(source[c])) {
+			builder.WriteByte(source[c])
+			c++
 		}
 	}
 
-	if c != pos && unicode.IsDigit(rune(source[c-1])) {
+	// Parse the scientific notation if present
+	if c < len(source) && (source[c] == 'e' || source[c] == 'E') {
+		builder.WriteByte(source[c])
+		c++
+		if c < len(source) && (source[c] == '+' || source[c] == '-') {
+			builder.WriteByte(source[c])
+			c++
+		}
+		if c < len(source) && unicode.IsDigit(rune(source[c])) {
+			for c < len(source) && unicode.IsDigit(rune(source[c])) {
+				builder.WriteByte(source[c])
+				c++
+			}
+		} else {
+			return nil, pos, false // Invalid scientific notation
+		}
+	}
+
+	// Ensure the next character (if any) is not alphanumeric
+	if c < len(source) && (unicode.IsLetter(rune(source[c])) || source[c] == '_') {
+		return nil, pos, false
+	}
+
+	if builder.Len() > 0 {
 		return &Token{
 			Type:  NumberType,
-			Value: v,
+			Value: builder.String(),
 			Pos: Position{
-				Line: r,
+				Line: 0,
 				Col:  pos,
 			},
-		}, pos + len(string(v)), true
+		}, c, true
 	}
+
 	return nil, pos, false
 }
 
@@ -228,17 +234,19 @@ func lex(source string) ([]*Token, error) {
 	cursor := 0
 	var err error
 	var ok bool
+
 	for cursor < len(source) {
-		if source[cursor] == ' ' {
-			cursor = cursor + 1
+		if source[cursor] == ' ' || source[cursor] == '\n' || source[cursor] == '\t' {
+			cursor++
 			continue
 		}
+
 		lexers := []Lexer{
 			lexKeyword,
+			lexSymbol,
 			lexIdentifier,
 			lexString,
 			lexNumber,
-			lexSymbol,
 		}
 
 		for _, l := range lexers {
@@ -254,12 +262,32 @@ func lex(source string) ([]*Token, error) {
 		}
 
 		if !ok {
+			problemPos := cursor
+			if len(tokens) > 0 {
+				problemPos = tokens[len(tokens)-1].Pos.Col + len(tokens[len(tokens)-1].Value)
+			}
 			fmt.Println(source)
-			problem_pos := tokens[len(tokens)-1].Pos.Col + len(tokens[len(tokens)-1].Value)
-			fmt.Println(strings.Repeat(" ", problem_pos) + "^")
-			return nil, fmt.Errorf("Failed to parse query after '%v' at pos %d\n", tokens[len(tokens)-1].Value, problem_pos)
+			fmt.Println(strings.Repeat(" ", problemPos) + "^")
+			return nil, fmt.Errorf("failed to parse query after '%v' at pos %d", source[cursor:], cursor)
 		}
 	}
 
-	return tokens, err
+	if err = isFirstTokenValid(tokens); err != nil {
+		return nil, err
+	}
+
+	return tokens, nil
+}
+
+func isFirstTokenValid(tokens []*Token) error {
+	if len(tokens) == 0 {
+		return fmt.Errorf("empty query")
+	}
+
+	firstTok := tokens[0]
+	if firstTok.Type == KeywordType && (firstTok.Value == string(SelectKeyword) || firstTok.Value == string(CreateKeyword) || firstTok.Value == string(InsertKeyword)) {
+		return nil
+	}
+
+	return fmt.Errorf("expected SELECT, CREATE or INSERT but got %s", firstTok.Value)
 }
