@@ -14,6 +14,13 @@ import (
 // Row represents a single row in a table
 type Row map[string]interface{}
 
+// ColumnDefinition represents the definition of a column in a table
+type ColumnDefinition struct {
+	Name     string
+	Type     string
+	Nullable bool
+}
+
 // Table represents a database table
 type Table struct {
 	Name    string
@@ -36,6 +43,7 @@ type Storage interface {
 	Delete(tableName string, where string) error
 	GetTable(tableName string) *Table
 	Close() error
+	ShowTables() ([]string, error)
 }
 
 // InMemoryStorage implements Storage interface using in-memory storage
@@ -322,6 +330,17 @@ func (s *InMemoryStorage) GetTable(tableName string) *Table {
 
 func (s *InMemoryStorage) Close() error {
 	return nil
+}
+
+func (s *InMemoryStorage) ShowTables() ([]string, error) {
+	s.db.mu.RLock()
+	defer s.db.mu.RUnlock()
+
+	tables := make([]string, 0, len(s.db.Tables))
+	for name := range s.db.Tables {
+		tables = append(tables, name)
+	}
+	return tables, nil
 }
 
 // JSONStorage implements Storage interface using JSON file storage
@@ -643,6 +662,17 @@ func (s *JSONStorage) GetTable(tableName string) *Table {
 
 func (s *JSONStorage) Close() error {
 	return s.save()
+}
+
+func (s *JSONStorage) ShowTables() ([]string, error) {
+	s.db.mu.RLock()
+	defer s.db.mu.RUnlock()
+
+	tables := make([]string, 0, len(s.db.Tables))
+	for name := range s.db.Tables {
+		tables = append(tables, name)
+	}
+	return tables, nil
 }
 
 // Helper function to evaluate WHERE conditions

@@ -15,4 +15,4 @@ chmod +x sql_tests.sh
 
 # Run the server with SQL tests
 echo "Starting UlinDB SQL Server with tests..."
-./sql_tests.sh | ./ulindb 
+./ulindb 

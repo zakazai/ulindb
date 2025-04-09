@@ -682,3 +682,14 @@ func (s *BTreeStorage) validateWhereColumns(table *Table, where string) error {
 	}
 	return nil
 }
+
+func (s *BTreeStorage) ShowTables() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tables := make([]string, 0, len(s.tables))
+	for name := range s.tables {
+		tables = append(tables, name)
+	}
+	return tables, nil
+}
