@@ -56,6 +56,7 @@ const (
 	CommaSymbol      Symbol = ","
 	ConcatSymbol     Symbol = "||"
 	SemicolonSymbol  Symbol = ";"
+	EqualSymbol      Symbol = "="
 )
 
 func lexKeyword(source string, pos int) (*Token, int, bool) {
@@ -86,23 +87,14 @@ func lexKeyword(source string, pos int) (*Token, int, bool) {
 		}
 	}
 
-	// If not a keyword, treat it as an identifier
-	if len(value) > 0 {
-		return &Token{
-			Type:  IdentifierType,
-			Value: value,
-			Pos: Position{
-				Line: 0,
-				Col:  pos,
-			},
-		}, c, false
-	}
-
 	return nil, pos, false
 }
 
 func lexSymbol(source string, pos int) (*Token, int, bool) {
-	symbols := []Symbol{LeftParenSymbol, RightParenSymbol, AsteriskSymbol, CommaSymbol, SemicolonSymbol, ConcatSymbol}
+	symbols := []Symbol{
+		LeftParenSymbol, RightParenSymbol, AsteriskSymbol,
+		CommaSymbol, SemicolonSymbol, ConcatSymbol, EqualSymbol,
+	}
 	for _, s := range symbols {
 		if strings.HasPrefix(source[pos:], string(s)) {
 			return &Token{
@@ -168,55 +160,64 @@ func lexString(source string, pos int) (*Token, int, bool) {
 func lexNumber(source string, pos int) (*Token, int, bool) {
 	c := pos
 	var builder strings.Builder
+	hasDecimal := false
+	hasExponent := false
+	isNumber := false
 
-	// Check if the first character is a digit
-	if c < len(source) && !unicode.IsDigit(rune(source[c])) {
-		return nil, pos, false
-	}
-
-	// Parse the integer part
-	for c < len(source) && unicode.IsDigit(rune(source[c])) {
-		builder.WriteByte(source[c])
-		c++
-	}
-
-	// Parse the fractional part if present
-	if c < len(source) && source[c] == '.' {
-		builder.WriteByte(source[c])
-		c++
-		for c < len(source) && unicode.IsDigit(rune(source[c])) {
+	for c < len(source) {
+		if unicode.IsDigit(rune(source[c])) {
 			builder.WriteByte(source[c])
 			c++
-		}
-	}
-
-	// Parse the scientific notation if present
-	if c < len(source) && (source[c] == 'e' || source[c] == 'E') {
-		builder.WriteByte(source[c])
-		c++
-		if c < len(source) && (source[c] == '+' || source[c] == '-') {
+			isNumber = true
+		} else if source[c] == '.' && !hasDecimal && !hasExponent {
 			builder.WriteByte(source[c])
+			hasDecimal = true
 			c++
-		}
-		if c < len(source) && unicode.IsDigit(rune(source[c])) {
-			for c < len(source) && unicode.IsDigit(rune(source[c])) {
+		} else if (source[c] == 'e' || source[c] == 'E') && !hasExponent && isNumber {
+			builder.WriteByte(source[c])
+			hasExponent = true
+			c++
+			if c < len(source) && (source[c] == '+' || source[c] == '-') {
 				builder.WriteByte(source[c])
 				c++
 			}
+		} else if unicode.IsLetter(rune(source[c])) {
+			return nil, pos, false
 		} else {
-			return nil, pos, false // Invalid scientific notation
+			break
 		}
 	}
 
-	// Ensure the next character (if any) is not alphanumeric
-	if c < len(source) && (unicode.IsLetter(rune(source[c])) || source[c] == '_') {
-		return nil, pos, false
-	}
-
-	if builder.Len() > 0 {
+	if builder.Len() > 0 && isNumber {
 		return &Token{
 			Type:  NumberType,
 			Value: builder.String(),
+			Pos: Position{
+				Line: 0,
+				Col:  pos,
+			},
+		}, c, true
+	}
+
+	return nil, pos, false
+}
+
+func lexCondition(source string, pos int) (*Token, int, bool) {
+	c := pos
+	var builder strings.Builder
+
+	// Parse until we encounter a space or a keyword
+	for c < len(source) && source[c] != ' ' && source[c] != '\n' && source[c] != '\t' {
+		builder.WriteByte(source[c])
+		c++
+	}
+
+	// Ensure the condition is valid (e.g., contains an operator like '=')
+	condition := builder.String()
+	if strings.Contains(condition, "=") || strings.Contains(condition, "<") || strings.Contains(condition, ">") {
+		return &Token{
+			Type:  StringType, // Treat conditions as strings to preserve the exact condition
+			Value: condition,
 			Pos: Position{
 				Line: 0,
 				Col:  pos,
@@ -235,18 +236,19 @@ func lex(source string) ([]*Token, error) {
 	var err error
 	var ok bool
 
+	lexers := []Lexer{
+		lexKeyword,
+		lexSymbol,
+		lexCondition, // Add the new condition lexer here
+		lexIdentifier,
+		lexString,
+		lexNumber,
+	}
+
 	for cursor < len(source) {
 		if source[cursor] == ' ' || source[cursor] == '\n' || source[cursor] == '\t' {
 			cursor++
 			continue
-		}
-
-		lexers := []Lexer{
-			lexKeyword,
-			lexSymbol,
-			lexIdentifier,
-			lexString,
-			lexNumber,
 		}
 
 		for _, l := range lexers {
@@ -281,13 +283,27 @@ func lex(source string) ([]*Token, error) {
 
 func isFirstTokenValid(tokens []*Token) error {
 	if len(tokens) == 0 {
-		return fmt.Errorf("empty query")
+		return fmt.Errorf("no tokens found")
 	}
 
-	firstTok := tokens[0]
-	if firstTok.Type == KeywordType && (firstTok.Value == string(SelectKeyword) || firstTok.Value == string(CreateKeyword) || firstTok.Value == string(InsertKeyword)) {
-		return nil
+	firstToken := tokens[0]
+	if firstToken.Type != KeywordType {
+		return fmt.Errorf("expected SELECT, CREATE or INSERT but got %s", firstToken.Value)
 	}
 
-	return fmt.Errorf("expected SELECT, CREATE or INSERT but got %s", firstTok.Value)
+	validFirstKeywords := []Keyword{
+		SelectKeyword,
+		InsertKeyword,
+		UpdateKeyword,
+		DeleteKeyword,
+		CreateKeyword,
+	}
+
+	for _, keyword := range validFirstKeywords {
+		if firstToken.Value == string(keyword) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("expected SELECT, CREATE or INSERT but got %s", firstToken.Value)
 }
