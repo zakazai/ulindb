@@ -16,6 +16,9 @@ func parseInsert(tokens []*Token) InsertStatement {
 		switch token.Type {
 		case KeywordType:
 			switch token.Value {
+			case string(IntoKeyword):
+				currentTokenIndex++
+				insertStmt.table = tokens[currentTokenIndex].Value
 			case string(ValuesKeyword):
 				currentTokenIndex++
 				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "(" {
@@ -79,6 +82,7 @@ type InsertItem struct {
 }
 
 type InsertStatement struct {
+	table string
 	items []InsertItem
 }
 
