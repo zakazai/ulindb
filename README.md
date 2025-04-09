@@ -1,4 +1,4 @@
-## go-toydb
+## ulindb
 
 Educational project to understand how a database is built
 
