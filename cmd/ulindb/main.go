@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	storage := storage.NewJSONStorage("data.json")
+	db := storage.NewJSONStorage("data.json")
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("UlinDB SQL Server started. Type 'exit' to quit.")
@@ -35,7 +35,7 @@ func main() {
 			continue
 		}
 
-		result, err := stmt.Execute(storage)
+		result, err := stmt.Execute(db)
 		if err != nil {
 			if strings.HasPrefix(err.Error(), "success:") {
 				// This is a success message

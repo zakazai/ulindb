@@ -1,19 +1,21 @@
-package ulindb
+package storage_test
 
 import (
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/zakazai/ulin-db/internal/storage"
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 func TestInMemoryStorage(t *testing.T) {
-	storage := NewInMemoryStorage()
+	storage := storage.NewInMemoryStorage()
 
 	// Test CreateTable
-	table := &Table{
+	table := &types.Table{
 		Name: "test",
-		Columns: []ColumnDefinition{
+		Columns: []types.ColumnDefinition{
 			{name: "id", typ: "INT"},
 			{name: "name", typ: "TEXT"},
 		},
@@ -75,13 +77,13 @@ func TestJSONStorage(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	// Create storage
-	storage, err := NewJSONStorage(tmpFile.Name())
+	storage, err := storage.NewJSONStorage(tmpFile.Name())
 	assert.NoError(t, err)
 
 	// Test CreateTable
-	table := &Table{
+	table := &types.Table{
 		Name: "test",
-		Columns: []ColumnDefinition{
+		Columns: []types.ColumnDefinition{
 			{name: "id", typ: "INT"},
 			{name: "name", typ: "TEXT"},
 		},
@@ -101,7 +103,7 @@ func TestJSONStorage(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create new storage instance to test persistence
-	storage, err = NewJSONStorage(tmpFile.Name())
+	storage, err = storage.NewJSONStorage(tmpFile.Name())
 	assert.NoError(t, err)
 
 	// Test that data was persisted
@@ -122,6 +124,7 @@ func TestJSONStorage(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create another storage instance
+	storage, err = storage.NewJSONStorage(tmpFile.Name())
 	storage, err = NewJSONStorage(tmpFile.Name())
 	assert.NoError(t, err)
 

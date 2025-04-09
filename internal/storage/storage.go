@@ -1,4 +1,4 @@
-package ulindb
+package storage
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 // Row represents a single row in a table
@@ -24,7 +26,7 @@ type ColumnDefinition struct {
 // Table represents a database table
 type Table struct {
 	Name    string
-	Columns []ColumnDefinition
+	Columns []types.ColumnDefinition
 	Rows    []Row
 }
 
@@ -469,13 +471,13 @@ func (s *JSONStorage) load() error {
 	for name, jsonTable := range jsonDB.Tables {
 		table := &Table{
 			Name:    jsonTable.Name,
-			Columns: make([]ColumnDefinition, len(jsonTable.Columns)),
+			Columns: make([]types.ColumnDefinition, len(jsonTable.Columns)),
 			Rows:    make([]Row, len(jsonTable.Rows)),
 		}
 
 		// Copy column definitions
 		for i, col := range jsonTable.Columns {
-			table.Columns[i] = ColumnDefinition{
+			table.Columns[i] = types.ColumnDefinition{
 				Name:     col.Name,
 				Type:     col.Type,
 				Nullable: col.Nullable,

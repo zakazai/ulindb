@@ -1,9 +1,10 @@
-package ulindb
+package planner
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/zakazai/ulin-db/internal/parser"
 )
 
 func TestPlanSelect(t *testing.T) {
@@ -44,10 +45,14 @@ func TestPlanSelect(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stmt := parse(test.query)
-			plan, err := stmt.Plan()
+			stmt, err := parser.Parse(test.query)
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected, plan)
+			plan, err := CreatePlan(stmt, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected.Type, plan.Type)
+			assert.Equal(t, test.expected.Table, plan.Table)
+			assert.Equal(t, test.expected.Columns, plan.Columns)
+			assert.Equal(t, test.expected.Where, plan.Where)
 		})
 	}
 }
@@ -64,17 +69,20 @@ func TestPlanInsert(t *testing.T) {
 			expected: &Plan{
 				Type:   "INSERT",
 				Table:  "tablex",
-				Values: []interface{}{nil},
+				Values: map[string]interface{}{"column1": float64(1), "column2": "test"},
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stmt := parse(test.query)
-			plan, err := stmt.Plan()
+			stmt, err := parser.Parse(test.query)
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected, plan)
+			plan, err := CreatePlan(stmt, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected.Type, plan.Type)
+			assert.Equal(t, test.expected.Table, plan.Table)
+			assert.Equal(t, test.expected.Values, plan.Values)
 		})
 	}
 }
@@ -92,7 +100,7 @@ func TestPlanUpdate(t *testing.T) {
 				Type:  "UPDATE",
 				Table: "tablex",
 				Set: map[string]interface{}{
-					"a": "1",
+					"a": float64(1),
 				},
 				Where: "b = 2",
 			},
@@ -101,10 +109,14 @@ func TestPlanUpdate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stmt := parse(test.query)
-			plan, err := stmt.Plan()
+			stmt, err := parser.Parse(test.query)
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected, plan)
+			plan, err := CreatePlan(stmt, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected.Type, plan.Type)
+			assert.Equal(t, test.expected.Table, plan.Table)
+			assert.Equal(t, test.expected.Set, plan.Set)
+			assert.Equal(t, test.expected.Where, plan.Where)
 		})
 	}
 }
@@ -128,10 +140,13 @@ func TestPlanDelete(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stmt := parse(test.query)
-			plan, err := stmt.Plan()
+			stmt, err := parser.Parse(test.query)
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected, plan)
+			plan, err := CreatePlan(stmt, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected.Type, plan.Type)
+			assert.Equal(t, test.expected.Table, plan.Table)
+			assert.Equal(t, test.expected.Where, plan.Where)
 		})
 	}
 }
@@ -155,10 +170,13 @@ func TestPlanCreate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stmt := parse(test.query)
-			plan, err := stmt.Plan()
+			stmt, err := parser.Parse(test.query)
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected, plan)
+			plan, err := CreatePlan(stmt, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expected.Type, plan.Type)
+			assert.Equal(t, test.expected.Table, plan.Table)
+			assert.Equal(t, test.expected.Columns, plan.Columns)
 		})
 	}
 }

@@ -1,23 +1,25 @@
 package types
 
+// Storage interface defines the methods required for database storage
+type Storage interface {
+	CreateTable(table *Table) error
+	Insert(tableName string, values map[string]interface{}) error
+	Update(tableName string, set map[string]interface{}, where string) error
+	Delete(tableName string, where string) error
+	Select(tableName string, columns []string, where string) (interface{}, error)
+	ShowTables() (interface{}, error)
+}
+
+// Table represents a database table
 type Table struct {
 	Name    string
-	Columns []Column
-	Rows    []map[string]interface{}
+	Columns []ColumnDefinition
+	Rows    [][]interface{}
 }
 
-type Column struct {
+// ColumnDefinition represents a column in a table
+type ColumnDefinition struct {
 	Name     string
 	Type     string
-	Required bool
-}
-
-type Storage interface {
-	Init() error
-	Select(table string, columns []string, where string) (interface{}, error)
-	Insert(table string, values map[string]interface{}) error
-	Update(table string, set map[string]interface{}, where string) error
-	Delete(table string, where string) error
-	CreateTable(table *Table) error
-	ShowTables() ([]string, error)
+	Nullable bool
 }
