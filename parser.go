@@ -51,8 +51,9 @@ type CreateStatement struct {
 }
 
 type ColumnDefinition struct {
-	name string
-	typ  string
+	name     string
+	typ      string
+	Nullable bool
 }
 
 type Expression struct {
@@ -274,7 +275,8 @@ func parseCreate(tokens []*Token) CreateStatement {
 					currentTokenIndex++
 					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
 						column := ColumnDefinition{
-							name: tokens[currentTokenIndex].Value,
+							name:     tokens[currentTokenIndex].Value,
+							Nullable: false, // By default, columns are not nullable
 						}
 						currentTokenIndex++
 						column.typ = strings.ToUpper(tokens[currentTokenIndex].Value)

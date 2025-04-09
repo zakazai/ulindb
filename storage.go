@@ -71,12 +71,15 @@ func (s *InMemoryStorage) Insert(tableName string, values map[string]interface{}
 		return fmt.Errorf("table %s does not exist", tableName)
 	}
 
+	// Validate all required columns are present
 	row := make(Row)
 	for _, col := range table.Columns {
-		if val, ok := values[col.name]; ok {
+		val, exists := values[col.name]
+		if !exists && !col.Nullable {
+			return fmt.Errorf("missing required column %s", col.name)
+		}
+		if exists {
 			row[col.name] = val
-		} else {
-			row[col.name] = nil
 		}
 	}
 
@@ -323,20 +326,36 @@ func (s *JSONStorage) Close() error {
 
 // Helper function to evaluate WHERE conditions
 func evaluateWhere(row Row, where string) bool {
-	// This is a simple implementation that only handles basic equality conditions
-	// In a real implementation, you would want to parse the WHERE clause properly
 	if where == "" {
 		return true
 	}
 
-	// Simple equality check for now
-	parts := strings.Split(where, "=")
+	// Handle AND conditions
+	if strings.Contains(where, " AND ") {
+		conditions := strings.Split(where, " AND ")
+		for _, condition := range conditions {
+			if !evaluateSimpleCondition(row, strings.TrimSpace(condition)) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return evaluateSimpleCondition(row, where)
+}
+
+// Helper function to evaluate a simple condition (no AND/OR)
+func evaluateSimpleCondition(row Row, condition string) bool {
+	// Simple equality check
+	parts := strings.Split(condition, "=")
 	if len(parts) != 2 {
 		return false
 	}
 
 	column := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
+	// Remove quotes if present
+	value = strings.Trim(value, "'\"")
 
 	rowValue, exists := row[column]
 	if !exists {

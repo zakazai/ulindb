@@ -168,15 +168,25 @@ func TestStorageEdgeCases(t *testing.T) {
 	table := &Table{
 		Name: "test",
 		Columns: []ColumnDefinition{
-			{name: "id", typ: "INT"},
-			{name: "name", typ: "TEXT"},
+			{name: "id", typ: "INT", Nullable: true},
+			{name: "name", typ: "TEXT", Nullable: false}, // name is required
 		},
 	}
 	err = storage.CreateTable(table)
 	assert.NoError(t, err)
 
+	// Test inserting with missing required column
 	err = storage.Insert("test", map[string]interface{}{
 		"id": 1,
+		// Missing required 'name' field
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required column name")
+
+	// Test inserting with all required columns
+	err = storage.Insert("test", map[string]interface{}{
+		"id":   1,
+		"name": "test",
 	})
 	assert.NoError(t, err)
 
@@ -195,5 +205,5 @@ func TestStorageEdgeCases(t *testing.T) {
 	// Test complex where conditions
 	rows, err = storage.Select("test", []string{"*"}, "id = 1 AND name = 'test'")
 	assert.NoError(t, err)
-	assert.Len(t, rows, 0)
-} 
+	assert.Len(t, rows, 1) // Should find the row since we set name = "test"
+}
