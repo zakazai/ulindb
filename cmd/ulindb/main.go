@@ -6,127 +6,48 @@ import (
 	"os"
 	"strings"
 
-	ulindb "github.com/zakazai/ulin-db"
+	"github.com/zakazai/ulin-db/internal/parser"
+	"github.com/zakazai/ulin-db/internal/storage"
 )
 
 func main() {
-	// Initialize storage
-	storage, err := ulindb.NewStorage(ulindb.StorageConfig{
-		Type:     ulindb.InMemoryStorageType,
-		FilePath: "",
-	})
-	if err != nil {
-		fmt.Printf("Failed to initialize storage: %v\n", err)
-		return
-	}
-	defer storage.Close()
-
-	// Check if input is being piped
-	stat, _ := os.Stdin.Stat()
-	isPiped := (stat.Mode() & os.ModeCharDevice) == 0
-
-	// Set up input scanner
+	storage := storage.NewJSONStorage("data.json")
 	scanner := bufio.NewScanner(os.Stdin)
-	if !isPiped {
-		fmt.Println("UlinDB SQL Server")
-		fmt.Println("Enter SQL commands (or 'exit' to quit):")
-	}
 
-	for {
-		if !isPiped {
-			fmt.Print("> ")
-		}
-		if !scanner.Scan() {
-			break
-		}
+	fmt.Println("UlinDB SQL Server started. Type 'exit' to quit.")
 
-		// Get input and trim whitespace
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
+	for scanner.Scan() {
+		input := scanner.Text()
+		if err := scanner.Err(); err != nil {
+			fmt.Println("Error reading input:", err)
 			continue
 		}
 
-		// Handle exit command
-		input = strings.TrimSuffix(input, ";")
-		if strings.ToLower(input) == "exit" || strings.ToLower(input) == "quit" {
+		input = strings.TrimSpace(input)
+		if strings.ToLower(input) == "exit" || strings.ToLower(input) == "exit;" {
+			fmt.Println("bye")
 			break
 		}
 
-		// Parse and execute the SQL command
-		stmt := ulindb.Parse(input)
-		if stmt.Err != nil {
-			fmt.Printf("Error parsing SQL: %v\n", stmt.Err)
-			continue
-		}
-
-		// Execute based on statement type
-		var err error
-		switch {
-		case stmt.CreateStatement.TableName != "":
-			err = storage.CreateTable(&ulindb.Table{
-				Name:    stmt.CreateStatement.TableName,
-				Columns: stmt.CreateStatement.Columns,
-			})
-		case stmt.InsertStatement.Table != "":
-			// Convert InsertStatement to map[string]interface{}
-			values := make(map[string]interface{})
-			table := storage.GetTable(stmt.InsertStatement.Table)
-			if table == nil {
-				fmt.Printf("Error: table %s does not exist\n", stmt.InsertStatement.Table)
-				continue
-			}
-			for i, col := range table.Columns {
-				if i < len(stmt.InsertStatement.Items) {
-					values[col.Name] = stmt.InsertStatement.Items[i].Value
-				}
-			}
-			err = storage.Insert(stmt.InsertStatement.Table, values)
-		case stmt.SelectStatement.From.Name != "":
-			// Convert SelectItem slice to string slice
-			columns := make([]string, len(stmt.SelectStatement.Items))
-			for i, item := range stmt.SelectStatement.Items {
-				if item.All {
-					columns[i] = "*"
-				} else {
-					columns[i] = item.Column
-				}
-			}
-			results, err := storage.Select(
-				stmt.SelectStatement.From.Name,
-				columns,
-				stmt.SelectStatement.Where,
-			)
-			if err == nil {
-				for _, row := range results {
-					fmt.Println(row)
-				}
-			}
-		case stmt.UpdateStatement.Table != "":
-			// Convert map[string]string to map[string]interface{}
-			values := make(map[string]interface{})
-			for k, v := range stmt.UpdateStatement.Set {
-				values[k] = v
-			}
-			err = storage.Update(
-				stmt.UpdateStatement.Table,
-				values,
-				stmt.UpdateStatement.Where,
-			)
-		case stmt.DeleteStatement.From.Name != "":
-			err = storage.Delete(
-				stmt.DeleteStatement.From.Name,
-				stmt.DeleteStatement.Where,
-			)
-		}
-
+		stmt, err := parser.Parse(input)
 		if err != nil {
-			fmt.Printf("Error executing command: %v\n", err)
-		} else {
-			fmt.Println("Command executed successfully")
+			fmt.Println("Error parsing statement:", err)
+			continue
 		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error reading input: %v\n", err)
+		result, err := stmt.Execute(storage)
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "success:") {
+				// This is a success message
+				fmt.Println(err.Error())
+			} else {
+				fmt.Println("Error executing statement:", err)
+			}
+			continue
+		}
+
+		if result != "" {
+			fmt.Println(result)
+		}
 	}
 }
