@@ -137,4 +137,109 @@ func TestSQLIntegration(t *testing.T) {
 	if err != nil {
 		t.Errorf("Delete on non-existent record should not error: %v", err)
 	}
+
+	// Additional test cases
+	// 5. Test SELECT with specific columns
+	results, err = storage.Select("users", []string{"name", "age"}, "")
+	if err != nil {
+		t.Fatalf("Failed to select specific columns: %v", err)
+	}
+
+	// 6. Test SELECT with complex WHERE condition
+	results, err = storage.Select("users", []string{"*"}, "age > 20 AND name = 'John'")
+	if err != nil {
+		t.Fatalf("Failed to select with complex condition: %v", err)
+	}
+
+	// 7. Test INSERT with NULL values
+	err = storage.Insert("users", map[string]interface{}{
+		"id":   3,
+		"name": nil,
+		"age":  35,
+	})
+	if err != nil {
+		t.Fatalf("Failed to insert with NULL value: %v", err)
+	}
+
+	// 8. Test UPDATE multiple columns
+	err = storage.Update("users", map[string]interface{}{
+		"name": "Jane",
+		"age":  27,
+	}, "id = 1")
+	if err != nil {
+		t.Fatalf("Failed to update multiple columns: %v", err)
+	}
+
+	// 9. Test CREATE TABLE with duplicate column names
+	createTableSQL = "CREATE TABLE duplicate (id INT, id INT)"
+	stmt = parse(createTableSQL)
+	if stmt.err == nil {
+		t.Error("Expected error for duplicate column names, got none")
+	}
+
+	// 10. Test INSERT with wrong data types
+	err = storage.Insert("users", map[string]interface{}{
+		"id":   "not_an_int",
+		"name": "Test",
+		"age":  40,
+	})
+	if err == nil {
+		t.Error("Expected error for wrong data type, got none")
+	}
+
+	// 11. Test SELECT with invalid column names
+	_, err = storage.Select("users", []string{"invalid_column"}, "")
+	if err == nil {
+		t.Error("Expected error for invalid column name, got none")
+	}
+
+	// 12. Test UPDATE with invalid column names
+	err = storage.Update("users", map[string]interface{}{
+		"invalid_column": "value",
+	}, "id = 1")
+	if err == nil {
+		t.Error("Expected error for invalid column name in UPDATE, got none")
+	}
+
+	// 13. Test DELETE with invalid condition
+	err = storage.Delete("users", "invalid_column = 1")
+	if err == nil {
+		t.Error("Expected error for invalid condition in DELETE, got none")
+	}
+
+	// 14. Test multiple operations in sequence
+	// Insert multiple records
+	for i := 1; i <= 5; i++ {
+		err = storage.Insert("users", map[string]interface{}{
+			"id":   i,
+			"name": "User" + string(rune('0'+i)),
+			"age":  20 + i,
+		})
+		if err != nil {
+			t.Fatalf("Failed to insert record %d: %v", i, err)
+		}
+	}
+
+	// Update multiple records
+	err = storage.Update("users", map[string]interface{}{
+		"age": 30,
+	}, "age < 25")
+	if err != nil {
+		t.Fatalf("Failed to update multiple records: %v", err)
+	}
+
+	// Delete multiple records
+	err = storage.Delete("users", "age = 30")
+	if err != nil {
+		t.Fatalf("Failed to delete multiple records: %v", err)
+	}
+
+	// Verify final state
+	results, err = storage.Select("users", []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("Failed to verify final state: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Expected 0 records after cleanup, got %d", len(results))
+	}
 }
