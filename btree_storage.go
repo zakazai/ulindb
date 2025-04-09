@@ -186,8 +186,7 @@ func (s *BTreeStorage) Update(tableName string, set map[string]interface{}, wher
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	table, exists := s.tables[tableName]
-	if !exists {
+	if _, exists := s.tables[tableName]; !exists {
 		return fmt.Errorf("table %s does not exist", tableName)
 	}
 
@@ -215,8 +214,7 @@ func (s *BTreeStorage) Delete(tableName string, where string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	table, exists := s.tables[tableName]
-	if !exists {
+	if _, exists := s.tables[tableName]; !exists {
 		return fmt.Errorf("table %s does not exist", tableName)
 	}
 
