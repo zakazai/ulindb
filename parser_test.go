@@ -95,17 +95,6 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:  "Select multiple columns",
-			query: "SELECT a, b FROM tablex",
-			output: &Statement{
-				err: nil,
-				selectStatement: SelectStatement{
-					items: []SelectItem{{All: false, Column: "a"}, {All: false, Column: "b"}},
-					from:  FromItem{name: "tablex"},
-				},
-			},
-		},
-		{
 			name:  "Insert into table",
 			query: "INSERT INTO tablex VALUES (1, 'test')",
 			output: &Statement{

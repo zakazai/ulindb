@@ -7,6 +7,7 @@ import (
 
 func parseInsert(tokens []*Token) InsertStatement {
 	var insertStmt InsertStatement
+	insertStmt.items = []InsertItem{} // Initialize with empty slice
 	var currentTokenIndex int
 
 	for currentTokenIndex < len(tokens) {
@@ -17,10 +18,11 @@ func parseInsert(tokens []*Token) InsertStatement {
 			switch token.Value {
 			case string(ValuesKeyword):
 				currentTokenIndex++
-				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
-					insertItem := InsertItem{}
-					insertStmt.items = append(insertStmt.items, insertItem)
+				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "(" {
 					currentTokenIndex++
+					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
+						currentTokenIndex++
+					}
 				}
 			}
 		}
@@ -143,29 +145,22 @@ func parseSelect(tokens []*Token) SelectStatement {
 		case KeywordType:
 			switch token.Value {
 			case string(FromKeyword):
-				// Parse the FROM clause
 				parsingColumns = false
 				currentTokenIndex++
-				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == IdentifierType {
-					selectStmt.from = FromItem{name: tokens[currentTokenIndex].Value}
-				}
+				selectStmt.from = FromItem{name: tokens[currentTokenIndex].Value}
 			case string(WhereKeyword):
-				// Parse the WHERE clause
 				currentTokenIndex++
-				var whereExpr strings.Builder
+				var conditionBuilder strings.Builder
 				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != KeywordType {
-					whereExpr.WriteString(tokens[currentTokenIndex].Value)
-					if currentTokenIndex+1 < len(tokens) && tokens[currentTokenIndex+1].Type != KeywordType {
-						whereExpr.WriteString(" ")
-					}
+					conditionBuilder.WriteString(tokens[currentTokenIndex].Value)
+					conditionBuilder.WriteString(" ")
 					currentTokenIndex++
 				}
-				selectStmt.where = whereExpr.String()
-				currentTokenIndex-- // Adjust for loop increment
+				selectStmt.where = strings.TrimSpace(conditionBuilder.String())
+				currentTokenIndex--
 			}
 		case IdentifierType, SymbolType:
 			if parsingColumns {
-				// Parse the SELECT clause
 				if token.Value == "*" {
 					selectStmt.items = append(selectStmt.items, SelectItem{All: true})
 				} else {
@@ -193,17 +188,24 @@ func parseUpdate(tokens []*Token) UpdateStatement {
 			case string(SetKeyword):
 				currentTokenIndex++
 				updateStmt.set = make(map[string]string)
-				for tokens[currentTokenIndex].Type != KeywordType && tokens[currentTokenIndex].Value != string(WhereKeyword) {
+				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != KeywordType {
 					column := tokens[currentTokenIndex].Value
-					currentTokenIndex++ // skip column name
-					currentTokenIndex++ // skip '='
+					currentTokenIndex += 2 // Skip '='
 					value := tokens[currentTokenIndex].Value
 					updateStmt.set[column] = value
 					currentTokenIndex++
 				}
+				currentTokenIndex--
 			case string(WhereKeyword):
 				currentTokenIndex++
-				updateStmt.where = tokens[currentTokenIndex].Value
+				var conditionBuilder strings.Builder
+				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != KeywordType {
+					conditionBuilder.WriteString(tokens[currentTokenIndex].Value)
+					conditionBuilder.WriteString(" ")
+					currentTokenIndex++
+				}
+				updateStmt.where = strings.TrimSpace(conditionBuilder.String())
+				currentTokenIndex--
 			}
 		case IdentifierType:
 			updateStmt.table = token.Value
@@ -233,7 +235,14 @@ func parseDelete(tokens []*Token) DeleteStatement {
 				deleteStmt.from = fromItem
 			case string(WhereKeyword):
 				currentTokenIndex++
-				deleteStmt.where = tokens[currentTokenIndex].Value
+				var conditionBuilder strings.Builder
+				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != KeywordType {
+					conditionBuilder.WriteString(tokens[currentTokenIndex].Value)
+					conditionBuilder.WriteString(" ")
+					currentTokenIndex++
+				}
+				deleteStmt.where = strings.TrimSpace(conditionBuilder.String())
+				currentTokenIndex--
 			}
 		}
 
@@ -257,14 +266,20 @@ func parseCreate(tokens []*Token) CreateStatement {
 				currentTokenIndex++
 				createStmt.tableName = tokens[currentTokenIndex].Value
 				currentTokenIndex++
-				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
-					column := ColumnDefinition{
-						name: tokens[currentTokenIndex].Value,
+				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "(" {
+					currentTokenIndex++
+					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
+						column := ColumnDefinition{
+							name: tokens[currentTokenIndex].Value,
+						}
+						currentTokenIndex++
+						column.typ = strings.ToUpper(tokens[currentTokenIndex].Value)
+						createStmt.columns = append(createStmt.columns, column)
+						currentTokenIndex++
+						if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "," {
+							currentTokenIndex++
+						}
 					}
-					currentTokenIndex++
-					column.typ = tokens[currentTokenIndex].Value
-					createStmt.columns = append(createStmt.columns, column)
-					currentTokenIndex++
 				}
 			}
 		}
