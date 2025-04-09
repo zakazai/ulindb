@@ -100,6 +100,7 @@ func TestParse(t *testing.T) {
 			output: &Statement{
 				err: nil,
 				insertStatement: InsertStatement{
+					table: "tablex",
 					items: []InsertItem{},
 				},
 			},
