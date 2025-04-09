@@ -1,13 +1,16 @@
-package ulindb
+package planner
 
 import (
 	"errors"
 	"fmt"
+
+	"github.com/zakazai/ulin-db/internal/parser"
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 // Plan represents a query execution plan
 type Plan struct {
-	Storage Storage
+	Storage types.Storage
 	Type    string
 	Table   string
 	Columns []string
@@ -16,10 +19,21 @@ type Plan struct {
 	Values  map[string]interface{}
 }
 
+type Planner struct {
+	storage types.Storage
+}
+
 // NewPlan creates a new query execution plan
-func NewPlan(storage Storage, stmt Statement) *Plan {
+func NewPlan(storage types.Storage, stmt parser.Statement) *Plan {
 	return &Plan{
 		Storage: storage,
+	}
+}
+
+// NewPlanner creates a new planner
+func NewPlanner(storage types.Storage) *Planner {
+	return &Planner{
+		storage: storage,
 	}
 }
 
@@ -43,36 +57,36 @@ func (p *Plan) Execute() (interface{}, error) {
 }
 
 // ExecuteStatement executes a SQL statement
-func ExecuteStatement(stmt Statement, storage Storage) (interface{}, error) {
+func ExecuteStatement(stmt parser.Statement, storage types.Storage) (interface{}, error) {
 	return stmt.Execute(storage)
 }
 
 // CreatePlan converts a Statement into an execution Plan
-func CreatePlan(stmt Statement, storage Storage) (*Plan, error) {
+func CreatePlan(stmt parser.Statement, storage types.Storage) (*Plan, error) {
 	plan := &Plan{
 		Storage: storage,
 	}
 
 	switch s := stmt.(type) {
-	case *SelectStatement:
+	case *parser.SelectStatement:
 		plan.Type = "SELECT"
 		plan.Table = s.Table
 		plan.Columns = s.Columns
 		plan.Where = s.Where
-	case *InsertStatement:
+	case *parser.InsertStatement:
 		plan.Type = "INSERT"
 		plan.Table = s.Table
 		plan.Values = s.Values
-	case *UpdateStatement:
+	case *parser.UpdateStatement:
 		plan.Type = "UPDATE"
 		plan.Table = s.Table
 		plan.Set = s.Set
 		plan.Where = s.Where
-	case *DeleteStatement:
+	case *parser.DeleteStatement:
 		plan.Type = "DELETE"
 		plan.Table = s.Table
 		plan.Where = s.Where
-	case *CreateStatement:
+	case *parser.CreateStatement:
 		plan.Type = "CREATE"
 		plan.Table = s.TableName
 		// Convert columns to string format
@@ -85,4 +99,8 @@ func CreatePlan(stmt Statement, storage Storage) (*Plan, error) {
 	}
 
 	return plan, nil
+}
+
+func (p *Planner) Execute(stmt parser.Statement) (interface{}, error) {
+	return stmt.Execute(p.storage)
 }

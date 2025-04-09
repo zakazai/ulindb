@@ -1,4 +1,4 @@
-package ulindb
+package lexer_test
 
 import (
 	"testing"

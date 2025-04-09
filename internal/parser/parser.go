@@ -1,9 +1,11 @@
-package ulindb
+package parser
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 // Token types
@@ -151,7 +153,7 @@ func (l *Lexer) lexSymbol() Token {
 }
 
 type Statement interface {
-	Execute(storage Storage) (interface{}, error)
+	Execute(storage types.Storage) (interface{}, error)
 }
 
 type BaseStatement struct {
@@ -187,35 +189,35 @@ type DeleteStatement struct {
 type CreateStatement struct {
 	BaseStatement
 	TableName string
-	Columns   []ColumnDefinition
+	Columns   []types.ColumnDefinition
 }
 
 type ShowTablesStatement struct {
 	BaseStatement
 }
 
-func (s *ShowTablesStatement) Execute(storage Storage) (interface{}, error) {
+func (s *ShowTablesStatement) Execute(storage types.Storage) (interface{}, error) {
 	return storage.ShowTables()
 }
 
-func (s *SelectStatement) Execute(storage Storage) (interface{}, error) {
+func (s *SelectStatement) Execute(storage types.Storage) (interface{}, error) {
 	return storage.Select(s.Table, s.Columns, s.Where)
 }
 
-func (s *InsertStatement) Execute(storage Storage) (interface{}, error) {
+func (s *InsertStatement) Execute(storage types.Storage) (interface{}, error) {
 	return nil, storage.Insert(s.Table, s.Values)
 }
 
-func (s *UpdateStatement) Execute(storage Storage) (interface{}, error) {
+func (s *UpdateStatement) Execute(storage types.Storage) (interface{}, error) {
 	return nil, storage.Update(s.Table, s.Set, s.Where)
 }
 
-func (s *DeleteStatement) Execute(storage Storage) (interface{}, error) {
+func (s *DeleteStatement) Execute(storage types.Storage) (interface{}, error) {
 	return nil, storage.Delete(s.Table, s.Where)
 }
 
-func (s *CreateStatement) Execute(storage Storage) (interface{}, error) {
-	return nil, storage.CreateTable(&Table{
+func (s *CreateStatement) Execute(storage types.Storage) (interface{}, error) {
+	return nil, storage.CreateTable(&types.Table{
 		Name:    s.TableName,
 		Columns: s.Columns,
 	})
@@ -285,7 +287,7 @@ func parseSelect(tokens []Token) (Statement, error) {
 		case parsingColumns:
 			if token.Value == "*" {
 				selectStmt.Columns = []string{"*"}
-			} else {
+			} else if token.Value != "," {
 				selectStmt.Columns = append(selectStmt.Columns, token.Value)
 			}
 		}
@@ -307,28 +309,73 @@ func parseInsert(tokens []Token) (Statement, error) {
 
 	insertStmt.Table = tokens[1].Value
 
-	// Parse VALUES clause
-	if tokens[2].Type != TokenTypeKeyword || tokens[2].Value != "VALUES" {
-		return nil, fmt.Errorf("expected VALUES keyword")
+	// Check if we have column names
+	var hasColumnNames bool
+	var valuesStart int
+	if tokens[2].Type == TokenTypeSymbol && tokens[2].Value == "(" {
+		hasColumnNames = true
+		valuesStart = 2
+	} else if tokens[2].Type == TokenTypeKeyword && tokens[2].Value == "VALUES" {
+		hasColumnNames = false
+		valuesStart = 3
+	} else {
+		return nil, fmt.Errorf("expected VALUES keyword or column list")
 	}
 
 	// Parse values
-	for i := 3; i < len(tokens); i += 2 {
-		if tokens[i].Type != TokenTypeIdentifier {
-			return nil, fmt.Errorf("expected column name")
+	if hasColumnNames {
+		// Parse column names
+		var columns []string
+		for i := valuesStart + 1; i < len(tokens); i++ {
+			if tokens[i].Type == TokenTypeSymbol && tokens[i].Value == ")" {
+				valuesStart = i + 1
+				break
+			}
+			if tokens[i].Type == TokenTypeIdentifier {
+				columns = append(columns, tokens[i].Value)
+			}
 		}
-		column := tokens[i].Value
 
-		if i+1 >= len(tokens) {
-			return nil, fmt.Errorf("expected value after column name")
+		// Find VALUES keyword
+		for ; valuesStart < len(tokens); valuesStart++ {
+			if tokens[valuesStart].Type == TokenTypeKeyword && tokens[valuesStart].Value == "VALUES" {
+				valuesStart++
+				break
+			}
 		}
-		value := tokens[i+1].Value
+	}
 
-		// Convert value to appropriate type
+	// Parse values
+	var values []interface{}
+	for i := valuesStart; i < len(tokens); i++ {
+		if tokens[i].Type == TokenTypeSymbol && tokens[i].Value == "(" {
+			continue
+		}
+		if tokens[i].Type == TokenTypeSymbol && tokens[i].Value == ")" {
+			break
+		}
+		if tokens[i].Type == TokenTypeSymbol && tokens[i].Value == "," {
+			continue
+		}
+
+		value := tokens[i].Value
 		if num, err := strconv.ParseFloat(value, 64); err == nil {
-			insertStmt.Values[column] = num
+			values = append(values, num)
 		} else {
-			insertStmt.Values[column] = value
+			values = append(values, strings.Trim(value, "'\""))
+		}
+	}
+
+	// Assign values to columns
+	if hasColumnNames {
+		// We need to get the column names from the table definition
+		// For now, we'll just use the values as is
+		for i, value := range values {
+			insertStmt.Values[fmt.Sprintf("column%d", i+1)] = value
+		}
+	} else {
+		for i, value := range values {
+			insertStmt.Values[fmt.Sprintf("column%d", i+1)] = value
 		}
 	}
 
@@ -469,7 +516,7 @@ func parseCreate(tokens []Token) (Statement, error) {
 		}
 
 		columnType := strings.ToUpper(tokens[i].Value)
-		createStmt.Columns = append(createStmt.Columns, ColumnDefinition{
+		createStmt.Columns = append(createStmt.Columns, types.ColumnDefinition{
 			Name:     columnName,
 			Type:     columnType,
 			Nullable: false,

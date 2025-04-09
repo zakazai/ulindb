@@ -1,4 +1,4 @@
-package ulindb
+package storage
 
 import (
 	"encoding/binary"

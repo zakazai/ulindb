@@ -1,4 +1,4 @@
-package ulindb
+package parser
 
 import (
 	"testing"
