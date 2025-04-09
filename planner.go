@@ -7,30 +7,88 @@ import (
 
 // Plan represents a query execution plan
 type Plan struct {
+	Storage Storage
+	Stmt    *Statement
 	Type    string
 	Table   string
 	Columns []string
 	Where   string
-	Values  []interface{}
 	Set     map[string]interface{}
+	Values  []interface{}
+}
+
+// NewPlan creates a new query execution plan
+func NewPlan(storage Storage, stmt *Statement) *Plan {
+	return &Plan{
+		Storage: storage,
+		Stmt:    stmt,
+	}
+}
+
+// Execute executes the query plan
+func (p *Plan) Execute() ([]Row, error) {
+	if p.Stmt.Err != nil {
+		return nil, p.Stmt.Err
+	}
+
+	if p.Stmt.SelectStatement.From.Name != "" {
+		return p.Storage.Select(p.Stmt.SelectStatement.From.Name, []string{"*"}, p.Stmt.SelectStatement.Where)
+	} else if p.Stmt.InsertStatement.Table != "" {
+		// TODO: Implement insert plan
+		return nil, fmt.Errorf("insert not implemented")
+	} else if p.Stmt.UpdateStatement.Table != "" {
+		// TODO: Implement update plan
+		return nil, fmt.Errorf("update not implemented")
+	} else if p.Stmt.DeleteStatement.From.Name != "" {
+		// TODO: Implement delete plan
+		return nil, fmt.Errorf("delete not implemented")
+	}
+
+	return nil, fmt.Errorf("unsupported statement type")
+}
+
+// ExecuteStatement executes a SQL statement
+func ExecuteStatement(s *Statement, storage Storage) error {
+	if s.Err != nil {
+		return s.Err
+	}
+
+	if s.SelectStatement.From.Name != "" {
+		results, err := storage.Select(s.SelectStatement.From.Name, []string{"*"}, s.SelectStatement.Where)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Results: %v\n", results)
+	} else if s.InsertStatement.Table != "" {
+		// TODO: Implement insert
+		return fmt.Errorf("insert not implemented")
+	} else if s.UpdateStatement.Table != "" {
+		// TODO: Implement update
+		return fmt.Errorf("update not implemented")
+	} else if s.DeleteStatement.From.Name != "" {
+		// TODO: Implement delete
+		return fmt.Errorf("delete not implemented")
+	}
+
+	return nil
 }
 
 // Planner converts a Statement into an execution Plan
 func (s *Statement) Plan() (*Plan, error) {
-	if s.err != nil {
-		return nil, s.err
+	if s.Err != nil {
+		return nil, s.Err
 	}
 
-	if s.selectStatement.items != nil {
-		return planSelect(&s.selectStatement)
-	} else if s.insertStatement.items != nil {
-		return planInsert(&s.insertStatement)
-	} else if s.updateStatement.table != "" {
-		return planUpdate(&s.updateStatement)
-	} else if s.deleteStatement.from.name != "" {
-		return planDelete(&s.deleteStatement)
-	} else if s.createStatement.tableName != "" {
-		return planCreate(&s.createStatement)
+	if s.SelectStatement.From.Name != "" {
+		return planSelect(&s.SelectStatement)
+	} else if s.InsertStatement.Table != "" {
+		return planInsert(&s.InsertStatement)
+	} else if s.UpdateStatement.Table != "" {
+		return planUpdate(&s.UpdateStatement)
+	} else if s.DeleteStatement.From.Name != "" {
+		return planDelete(&s.DeleteStatement)
+	} else if s.CreateStatement.TableName != "" {
+		return planCreate(&s.CreateStatement)
 	}
 
 	return nil, errors.New("invalid statement type")
@@ -39,12 +97,12 @@ func (s *Statement) Plan() (*Plan, error) {
 func planSelect(stmt *SelectStatement) (*Plan, error) {
 	plan := &Plan{
 		Type:    "SELECT",
-		Table:   stmt.from.name,
+		Table:   stmt.From.Name,
 		Columns: make([]string, 0),
-		Where:   stmt.where,
+		Where:   stmt.Where,
 	}
 
-	for _, item := range stmt.items {
+	for _, item := range stmt.Items {
 		if item.All {
 			plan.Columns = append(plan.Columns, "*")
 		} else if item.Column != "," {
@@ -58,7 +116,7 @@ func planSelect(stmt *SelectStatement) (*Plan, error) {
 func planInsert(stmt *InsertStatement) (*Plan, error) {
 	plan := &Plan{
 		Type:   "INSERT",
-		Table:  stmt.table,
+		Table:  stmt.Table,
 		Values: make([]interface{}, 1),
 	}
 
@@ -72,12 +130,12 @@ func planInsert(stmt *InsertStatement) (*Plan, error) {
 func planUpdate(stmt *UpdateStatement) (*Plan, error) {
 	plan := &Plan{
 		Type:  "UPDATE",
-		Table: stmt.table,
+		Table: stmt.Table,
 		Set:   make(map[string]interface{}),
-		Where: stmt.where,
+		Where: stmt.Where,
 	}
 
-	for k, v := range stmt.set {
+	for k, v := range stmt.Set {
 		plan.Set[k] = v
 	}
 
@@ -87,8 +145,8 @@ func planUpdate(stmt *UpdateStatement) (*Plan, error) {
 func planDelete(stmt *DeleteStatement) (*Plan, error) {
 	plan := &Plan{
 		Type:  "DELETE",
-		Table: stmt.from.name,
-		Where: stmt.where,
+		Table: stmt.From.Name,
+		Where: stmt.Where,
 	}
 
 	return plan, nil
@@ -97,12 +155,12 @@ func planDelete(stmt *DeleteStatement) (*Plan, error) {
 func planCreate(stmt *CreateStatement) (*Plan, error) {
 	plan := &Plan{
 		Type:    "CREATE",
-		Table:   stmt.tableName,
-		Columns: make([]string, len(stmt.columns)),
+		Table:   stmt.TableName,
+		Columns: make([]string, len(stmt.Columns)),
 	}
 
-	for i, col := range stmt.columns {
-		plan.Columns[i] = fmt.Sprintf("%s %s", col.name, col.typ)
+	for i, col := range stmt.Columns {
+		plan.Columns[i] = fmt.Sprintf("%s %s", col.Name, col.Type)
 	}
 
 	return plan, nil

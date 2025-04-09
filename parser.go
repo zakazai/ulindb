@@ -1,13 +1,14 @@
 package ulindb
 
 import (
-	"log"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
 func parseInsert(tokens []*Token) InsertStatement {
 	var insertStmt InsertStatement
-	insertStmt.items = []InsertItem{} // Initialize with empty slice
+	insertStmt.Items = []InsertItem{} // Initialize with empty slice
 	var currentTokenIndex int
 
 	for currentTokenIndex < len(tokens) {
@@ -18,12 +19,35 @@ func parseInsert(tokens []*Token) InsertStatement {
 			switch token.Value {
 			case string(IntoKeyword):
 				currentTokenIndex++
-				insertStmt.table = tokens[currentTokenIndex].Value
+				insertStmt.Table = tokens[currentTokenIndex].Value
 			case string(ValuesKeyword):
 				currentTokenIndex++
 				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "(" {
 					currentTokenIndex++
-					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
+					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Value != ")" {
+						if tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "," {
+							currentTokenIndex++
+							continue
+						}
+						value := tokens[currentTokenIndex].Value
+						if tokens[currentTokenIndex].Type == StringType {
+							// Remove quotes from string values
+							value = strings.Trim(value, "'\"")
+							insertStmt.Items = append(insertStmt.Items, InsertItem{Value: value})
+						} else if tokens[currentTokenIndex].Type == NumberType {
+							// Convert numeric values to float64
+							if strings.Contains(value, ".") {
+								if f, err := strconv.ParseFloat(value, 64); err == nil {
+									insertStmt.Items = append(insertStmt.Items, InsertItem{Value: f})
+								}
+							} else {
+								if i, err := strconv.Atoi(value); err == nil {
+									insertStmt.Items = append(insertStmt.Items, InsertItem{Value: i})
+								}
+							}
+						} else if tokens[currentTokenIndex].Type == KeywordType && tokens[currentTokenIndex].Value == "NULL" {
+							insertStmt.Items = append(insertStmt.Items, InsertItem{Value: nil})
+						}
 						currentTokenIndex++
 					}
 				}
@@ -37,29 +61,30 @@ func parseInsert(tokens []*Token) InsertStatement {
 }
 
 type Statement struct {
-	err             error
-	selectStatement SelectStatement
-	insertStatement InsertStatement
-	updateStatement UpdateStatement
-	deleteStatement DeleteStatement
-	createStatement CreateStatement
+	Err             error
+	SelectStatement SelectStatement
+	InsertStatement InsertStatement
+	UpdateStatement UpdateStatement
+	DeleteStatement DeleteStatement
+	CreateStatement CreateStatement
 }
 
 type CreateStatement struct {
-	tableName string
-	columns   []ColumnDefinition
+	TableName string
+	Columns   []ColumnDefinition
+	Err       error
 }
 
 type ColumnDefinition struct {
-	name     string
-	typ      string
+	Name     string
+	Type     string
 	Nullable bool
 }
 
 type Expression struct {
-	left     string
-	operator string
-	right    string
+	Left     string
+	Operator string
+	Right    string
 }
 
 type SelectItem struct {
@@ -70,72 +95,73 @@ type SelectItem struct {
 }
 
 type FromItem struct {
-	name string
+	Name string
 }
 
 type SelectStatement struct {
-	items []SelectItem
-	from  FromItem
-	where string
+	Items []SelectItem
+	From  FromItem
+	Where string
 }
 
 type InsertItem struct {
+	Value interface{}
 }
 
 type InsertStatement struct {
-	table string
-	items []InsertItem
+	Table string
+	Items []InsertItem
 }
 
 type UpdateStatement struct {
-	table string
-	set   map[string]string
-	where string
+	Table string
+	Set   map[string]interface{}
+	Where string
 }
 
 type DeleteStatement struct {
-	from  FromItem
-	where string
+	From  FromItem
+	Where string
 }
 
-func parse(query string) *Statement {
+func Parse(query string) *Statement {
+	// Handle exit and quit commands
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "exit" || query == "quit" {
+		return &Statement{}
+	}
+
 	tokens, err := lex(query)
 	if err != nil {
-		log.Fatal("Error found in SQL ", err)
+		return &Statement{Err: err}
+	}
+	if len(tokens) == 0 {
+		return &Statement{Err: fmt.Errorf("empty query")}
 	}
 
-	var queryType = tokens[0]
-	switch {
-	case queryType.Type == KeywordType && queryType.Value == string(SelectKeyword):
-		return &Statement{
-			err:             nil,
-			selectStatement: parseSelect(tokens),
-		}
-	case queryType.Type == KeywordType && queryType.Value == string(InsertKeyword):
-		return &Statement{
-			err:             nil,
-			insertStatement: parseInsert(tokens),
-		}
-	case queryType.Type == KeywordType && queryType.Value == string(UpdateKeyword):
-		return &Statement{
-			err:             nil,
-			updateStatement: parseUpdate(tokens),
-		}
-	case queryType.Type == KeywordType && queryType.Value == string(DeleteKeyword):
-		return &Statement{
-			err:             nil,
-			deleteStatement: parseDelete(tokens),
-		}
-	case queryType.Type == KeywordType && queryType.Value == string(CreateKeyword):
-		return &Statement{
-			err:             nil,
-			createStatement: parseCreate(tokens),
+	var stmt Statement
+
+	switch tokens[0].Value {
+	case string(SelectKeyword):
+		stmt.SelectStatement = parseSelect(tokens[1:])
+	case string(InsertKeyword):
+		stmt.InsertStatement = parseInsert(tokens[1:])
+	case string(UpdateKeyword):
+		stmt.UpdateStatement = parseUpdate(tokens[1:])
+	case string(DeleteKeyword):
+		stmt.DeleteStatement = parseDelete(tokens[1:])
+	case string(CreateKeyword):
+		createStmt := parseCreate(tokens[1:])
+		if createStmt.Err != nil {
+			stmt.Err = createStmt.Err
+		} else {
+			stmt.CreateStatement = createStmt
 		}
 	default:
-		log.Fatal("Only SELECT, INSERT, UPDATE, DELETE, and CREATE are supported")
+		stmt.Err = fmt.Errorf("expected SELECT, CREATE, INSERT, UPDATE, or DELETE but got %s", tokens[0].Value)
 	}
 
-	return &Statement{}
+	return &stmt
 }
 
 func parseSelect(tokens []*Token) SelectStatement {
@@ -152,7 +178,7 @@ func parseSelect(tokens []*Token) SelectStatement {
 			case string(FromKeyword):
 				parsingColumns = false
 				currentTokenIndex++
-				selectStmt.from = FromItem{name: tokens[currentTokenIndex].Value}
+				selectStmt.From = FromItem{Name: tokens[currentTokenIndex].Value}
 			case string(WhereKeyword):
 				currentTokenIndex++
 				var conditionBuilder strings.Builder
@@ -161,15 +187,15 @@ func parseSelect(tokens []*Token) SelectStatement {
 					conditionBuilder.WriteString(" ")
 					currentTokenIndex++
 				}
-				selectStmt.where = strings.TrimSpace(conditionBuilder.String())
+				selectStmt.Where = strings.TrimSpace(conditionBuilder.String())
 				currentTokenIndex--
 			}
 		case IdentifierType, SymbolType:
 			if parsingColumns {
 				if token.Value == "*" {
-					selectStmt.items = append(selectStmt.items, SelectItem{All: true})
+					selectStmt.Items = append(selectStmt.Items, SelectItem{All: true})
 				} else {
-					selectStmt.items = append(selectStmt.items, SelectItem{All: false, Column: token.Value})
+					selectStmt.Items = append(selectStmt.Items, SelectItem{All: false, Column: token.Value})
 				}
 			}
 		}
@@ -192,13 +218,36 @@ func parseUpdate(tokens []*Token) UpdateStatement {
 			switch token.Value {
 			case string(SetKeyword):
 				currentTokenIndex++
-				updateStmt.set = make(map[string]string)
+				updateStmt.Set = make(map[string]interface{})
 				for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != KeywordType {
+					if currentTokenIndex+2 >= len(tokens) {
+						break
+					}
 					column := tokens[currentTokenIndex].Value
 					currentTokenIndex += 2 // Skip '='
 					value := tokens[currentTokenIndex].Value
-					updateStmt.set[column] = value
+					if tokens[currentTokenIndex].Type == StringType {
+						// Remove quotes from string values
+						value = strings.Trim(value, "'\"")
+						updateStmt.Set[column] = value
+					} else if tokens[currentTokenIndex].Type == NumberType {
+						// Convert numeric values to float64
+						if strings.Contains(value, ".") {
+							if f, err := strconv.ParseFloat(value, 64); err == nil {
+								updateStmt.Set[column] = f
+							}
+						} else {
+							if i, err := strconv.Atoi(value); err == nil {
+								updateStmt.Set[column] = i
+							}
+						}
+					} else if tokens[currentTokenIndex].Type == KeywordType && tokens[currentTokenIndex].Value == "NULL" {
+						updateStmt.Set[column] = nil
+					}
 					currentTokenIndex++
+					if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "," {
+						currentTokenIndex++
+					}
 				}
 				currentTokenIndex--
 			case string(WhereKeyword):
@@ -209,11 +258,11 @@ func parseUpdate(tokens []*Token) UpdateStatement {
 					conditionBuilder.WriteString(" ")
 					currentTokenIndex++
 				}
-				updateStmt.where = strings.TrimSpace(conditionBuilder.String())
+				updateStmt.Where = strings.TrimSpace(conditionBuilder.String())
 				currentTokenIndex--
 			}
 		case IdentifierType:
-			updateStmt.table = token.Value
+			updateStmt.Table = token.Value
 		}
 
 		currentTokenIndex++
@@ -235,9 +284,9 @@ func parseDelete(tokens []*Token) DeleteStatement {
 			case string(FromKeyword):
 				currentTokenIndex++
 				fromItem := FromItem{
-					name: tokens[currentTokenIndex].Value,
+					Name: tokens[currentTokenIndex].Value,
 				}
-				deleteStmt.from = fromItem
+				deleteStmt.From = fromItem
 			case string(WhereKeyword):
 				currentTokenIndex++
 				var conditionBuilder strings.Builder
@@ -246,7 +295,7 @@ func parseDelete(tokens []*Token) DeleteStatement {
 					conditionBuilder.WriteString(" ")
 					currentTokenIndex++
 				}
-				deleteStmt.where = strings.TrimSpace(conditionBuilder.String())
+				deleteStmt.Where = strings.TrimSpace(conditionBuilder.String())
 				currentTokenIndex--
 			}
 		}
@@ -260,6 +309,7 @@ func parseDelete(tokens []*Token) DeleteStatement {
 func parseCreate(tokens []*Token) CreateStatement {
 	var createStmt CreateStatement
 	var currentTokenIndex int
+	columnNames := make(map[string]bool)
 
 	for currentTokenIndex < len(tokens) {
 		token := tokens[currentTokenIndex]
@@ -269,18 +319,25 @@ func parseCreate(tokens []*Token) CreateStatement {
 			switch token.Value {
 			case string(TableKeyword):
 				currentTokenIndex++
-				createStmt.tableName = tokens[currentTokenIndex].Value
+				createStmt.TableName = tokens[currentTokenIndex].Value
 				currentTokenIndex++
 				if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "(" {
 					currentTokenIndex++
 					for currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type != SymbolType {
+						columnName := tokens[currentTokenIndex].Value
+						if columnNames[columnName] {
+							createStmt.Err = fmt.Errorf("duplicate column name: %s", columnName)
+							return createStmt
+						}
+						columnNames[columnName] = true
+
 						column := ColumnDefinition{
-							name:     tokens[currentTokenIndex].Value,
+							Name:     columnName,
 							Nullable: false, // By default, columns are not nullable
 						}
 						currentTokenIndex++
-						column.typ = strings.ToUpper(tokens[currentTokenIndex].Value)
-						createStmt.columns = append(createStmt.columns, column)
+						column.Type = strings.ToUpper(tokens[currentTokenIndex].Value)
+						createStmt.Columns = append(createStmt.Columns, column)
 						currentTokenIndex++
 						if currentTokenIndex < len(tokens) && tokens[currentTokenIndex].Type == SymbolType && tokens[currentTokenIndex].Value == "," {
 							currentTokenIndex++

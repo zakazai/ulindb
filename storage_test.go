@@ -192,15 +192,15 @@ func TestStorageEdgeCases(t *testing.T) {
 
 	// Test Select with non-existent column
 	rows, err := storage.Select("test", []string{"nonexistent"}, "")
-	assert.NoError(t, err)
-	assert.Len(t, rows, 1)
-	assert.Nil(t, rows[0]["nonexistent"])
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid column name: nonexistent")
 
 	// Test Update with non-existent column
 	err = storage.Update("test", map[string]interface{}{
 		"nonexistent": "value",
 	}, "")
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid column name: nonexistent")
 
 	// Test complex where conditions
 	rows, err = storage.Select("test", []string{"*"}, "id = 1 AND name = 'test'")

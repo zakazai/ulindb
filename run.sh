@@ -2,7 +2,7 @@
 
 # Build the server
 echo "Building UlinDB SQL Server..."
-go build -o ulin-db
+go build -o ulindb ./cmd/ulindb
 
 # Check if build was successful
 if [ $? -ne 0 ]; then
@@ -10,6 +10,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Run the server
-echo "Starting UlinDB SQL Server..."
-./ulin-db 
+# Make sql_tests.sh executable
+chmod +x sql_tests.sh
+
+# Run the server with SQL tests
+echo "Starting UlinDB SQL Server with tests..."
+./sql_tests.sh | ./ulindb 

@@ -110,12 +110,12 @@ func (s *BTreeStorage) Insert(tableName string, values map[string]interface{}) e
 	// Validate all required columns are present
 	row := make(Row)
 	for _, col := range table.Columns {
-		val, exists := values[col.name]
+		val, exists := values[col.Name]
 		if !exists && !col.Nullable {
-			return fmt.Errorf("missing required column %s", col.name)
+			return fmt.Errorf("missing required column %s", col.Name)
 		}
 		if exists {
-			row[col.name] = val
+			row[col.Name] = val
 		}
 	}
 
@@ -136,14 +136,14 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where string) 
 	if len(columns) == 0 {
 		columns = make([]string, len(table.Columns))
 		for i, col := range table.Columns {
-			columns[i] = col.name
+			columns[i] = col.Name
 		}
 	} else {
 		// Validate requested columns exist in table
 		for _, col := range columns {
 			found := false
 			for _, tableCol := range table.Columns {
-				if tableCol.name == col {
+				if tableCol.Name == col {
 					found = true
 					break
 				}
@@ -238,6 +238,12 @@ func (s *BTreeStorage) Delete(tableName string, where string) error {
 
 func (s *BTreeStorage) Close() error {
 	return s.file.Close()
+}
+
+func (s *BTreeStorage) GetTable(tableName string) *Table {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tables[tableName]
 }
 
 // Helper functions for B-tree operations
@@ -597,4 +603,82 @@ func tableNameFromKey(key string) string {
 		return parts[0]
 	}
 	return ""
+}
+
+func (s *BTreeStorage) validateDataType(value interface{}, columnType string) error {
+	if value == nil {
+		return nil // NULL values are allowed for any type
+	}
+
+	switch columnType {
+	case "INT":
+		switch v := value.(type) {
+		case int, int32, int64:
+			return nil
+		case float64:
+			if float64(int(v)) == v {
+				return nil
+			}
+		}
+		return fmt.Errorf("value %v is not an integer", value)
+	case "STRING", "TEXT":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("value %v is not a string", value)
+		}
+	}
+	return nil
+}
+
+func (s *BTreeStorage) validateColumns(table *Table, columns []string) error {
+	if len(columns) == 1 && columns[0] == "*" {
+		return nil
+	}
+
+	columnMap := make(map[string]bool)
+	for _, col := range table.Columns {
+		columnMap[col.Name] = true
+	}
+
+	for _, col := range columns {
+		if !columnMap[col] {
+			return fmt.Errorf("invalid column name: %s", col)
+		}
+	}
+	return nil
+}
+
+func (s *BTreeStorage) validateColumnNames(table *Table, values map[string]interface{}) error {
+	columnMap := make(map[string]bool)
+	for _, col := range table.Columns {
+		columnMap[col.Name] = true
+	}
+
+	for colName := range values {
+		if !columnMap[colName] {
+			return fmt.Errorf("invalid column name: %s", colName)
+		}
+	}
+	return nil
+}
+
+func (s *BTreeStorage) validateWhereColumns(table *Table, where string) error {
+	if where == "" {
+		return nil
+	}
+
+	columnMap := make(map[string]bool)
+	for _, col := range table.Columns {
+		columnMap[col.Name] = true
+	}
+
+	// Split on AND but preserve the AND tokens
+	parts := strings.Split(where, " AND ")
+	for _, part := range parts {
+		// Split on spaces to get the column name
+		conditionParts := strings.Fields(strings.TrimSpace(part))
+		if len(conditionParts) > 0 && !columnMap[conditionParts[0]] {
+			return fmt.Errorf("invalid column name in WHERE clause: %s", conditionParts[0])
+		}
+	}
+	return nil
 }
