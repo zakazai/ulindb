@@ -6,29 +6,43 @@ import (
 	"unicode"
 )
 
+// TokenType represents the type of a token
 type TokenType int
 
 const (
-	ILLEGAL TokenType = iota
-	EOF
-	WHITESPACE
-	IDENTIFIER
-	STRING
-	NUMBER
-	COMMA
-	SEMICOLON
-	LPAREN
-	RPAREN
-	ASTERISK
-	EQUALS
+	// EOF represents the end of file token
+	EOF TokenType = iota
+	// KEYWORD represents a keyword token
 	KEYWORD
+	// IDENTIFIER represents an identifier token
+	IDENTIFIER
+	// NUMBER represents a number token
+	NUMBER
+	// STRING represents a string token
+	STRING
+	// SYMBOL represents a symbol token
+	SYMBOL
+	// LPAREN represents a left parenthesis
+	LPAREN
+	// RPAREN represents a right parenthesis
+	RPAREN
+	// COMMA represents a comma
+	COMMA
+	// SEMICOLON represents a semicolon
+	SEMICOLON
+	// ASTERISK represents an asterisk
+	ASTERISK
+	// EQUALS represents an equals sign
+	EQUALS
 )
 
+// Token represents a lexical token
 type Token struct {
 	Type    TokenType
 	Literal string
 }
 
+// Lexer represents a lexical analyzer
 type Lexer struct {
 	input        string
 	position     int
@@ -36,6 +50,7 @@ type Lexer struct {
 	ch           byte
 }
 
+// New creates a new lexer with the given input
 func New(input string) *Lexer {
 	l := &Lexer{input: input}
 	l.readChar()
@@ -100,7 +115,7 @@ func (l *Lexer) NextToken() Token {
 			tok.Literal = l.readNumber()
 			return tok
 		} else {
-			tok = Token{Type: ILLEGAL, Literal: string(l.ch)}
+			tok = Token{Type: SYMBOL, Literal: string(l.ch)}
 		}
 	}
 
@@ -163,7 +178,7 @@ func isKeyword(word string) bool {
 	keywords := []string{
 		"SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES",
 		"UPDATE", "SET", "DELETE", "CREATE", "TABLE", "INT",
-		"STRING", "SHOW", "TABLES", "NULL", "AND", "OR",
+		"STRING", "SHOW", "TABLES", "NULL", "AND", "OR", "TEXT",
 	}
 	for _, keyword := range keywords {
 		if word == keyword {
