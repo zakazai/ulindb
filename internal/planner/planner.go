@@ -14,7 +14,7 @@ type Plan struct {
 	Type    string
 	Table   string
 	Columns []string
-	Where   string
+	Where   map[string]interface{}
 	Set     map[string]interface{}
 	Values  map[string]interface{}
 }
@@ -88,7 +88,7 @@ func CreatePlan(stmt parser.Statement, storage types.Storage) (*Plan, error) {
 		plan.Where = s.Where
 	case *parser.CreateStatement:
 		plan.Type = "CREATE"
-		plan.Table = s.TableName
+		plan.Table = s.Table
 		// Convert columns to string format
 		plan.Columns = make([]string, len(s.Columns))
 		for i, col := range s.Columns {

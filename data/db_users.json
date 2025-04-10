@@ -1,0 +1,27 @@
+{
+  "name": "users",
+  "columns": [
+    {
+      "Name": "id",
+      "Type": "INT",
+      "Nullable": true
+    },
+    {
+      "Name": "name",
+      "Type": "STRING",
+      "Nullable": true
+    },
+    {
+      "Name": "age",
+      "Type": "INT",
+      "Nullable": true
+    }
+  ],
+  "rows": [
+    {
+      "age": 30,
+      "id": 2,
+      "name": ""
+    }
+  ]
+}

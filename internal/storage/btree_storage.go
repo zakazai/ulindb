@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 const (
@@ -31,7 +33,7 @@ type BTreeStorage struct {
 	file     *os.File
 	root     int64 // Page offset of root node
 	mu       sync.RWMutex
-	tables   map[string]*Table
+	tables   map[string]*types.Table
 	pagePool sync.Pool
 }
 
@@ -44,7 +46,7 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 
 	storage := &BTreeStorage{
 		file:   file,
-		tables: make(map[string]*Table),
+		tables: make(map[string]*types.Table),
 		pagePool: sync.Pool{
 			New: func() interface{} {
 				return make([]byte, pageSize)
@@ -86,7 +88,7 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 	return storage, nil
 }
 
-func (s *BTreeStorage) CreateTable(table *Table) error {
+func (s *BTreeStorage) CreateTable(table *types.Table) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -108,7 +110,7 @@ func (s *BTreeStorage) Insert(tableName string, values map[string]interface{}) e
 	}
 
 	// Validate all required columns are present
-	row := make(Row)
+	row := make(types.Row)
 	for _, col := range table.Columns {
 		val, exists := values[col.Name]
 		if !exists && !col.Nullable {
@@ -123,7 +125,7 @@ func (s *BTreeStorage) Insert(tableName string, values map[string]interface{}) e
 	return s.insertRow(tableName, row)
 }
 
-func (s *BTreeStorage) Select(tableName string, columns []string, where string) ([]Row, error) {
+func (s *BTreeStorage) Select(tableName string, columns []string, where map[string]interface{}) ([]types.Row, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -161,10 +163,10 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where string) 
 	}
 
 	// Filter rows based on where clause and select specified columns
-	var results []Row
+	var results []types.Row
 	for _, row := range allRows {
-		if where == "" || evaluateWhere(row, where) {
-			result := make(Row)
+		if where == nil || s.matchesWhere(row, where) {
+			result := make(types.Row)
 			for _, col := range columns {
 				if col == "*" {
 					for k, v := range row {
@@ -182,7 +184,7 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where string) 
 	return results, nil
 }
 
-func (s *BTreeStorage) Update(tableName string, set map[string]interface{}, where string) error {
+func (s *BTreeStorage) Update(tableName string, set map[string]interface{}, where map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -197,20 +199,25 @@ func (s *BTreeStorage) Update(tableName string, set map[string]interface{}, wher
 	}
 
 	// Update matching rows
+	rowsAffected := 0
 	for i, row := range rows {
-		if where == "" || evaluateWhere(row, where) {
+		if where == nil || s.matchesWhere(row, where) {
 			for k, v := range set {
-				row[k] = v
+				rows[i][k] = v
 			}
-			rows[i] = row
+			rowsAffected++
 		}
 	}
 
-	// Write back all rows
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows matched the WHERE clause")
+	}
+
+	// Write updated rows back to B-tree
 	return s.writeRows(tableName, rows)
 }
 
-func (s *BTreeStorage) Delete(tableName string, where string) error {
+func (s *BTreeStorage) Delete(tableName string, where map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -224,15 +231,22 @@ func (s *BTreeStorage) Delete(tableName string, where string) error {
 		return err
 	}
 
-	// Filter out rows that match where clause
-	var newRows []Row
+	// Filter out rows that match the where clause
+	var newRows []types.Row
+	rowsAffected := 0
 	for _, row := range rows {
-		if where == "" || !evaluateWhere(row, where) {
+		if where == nil || !s.matchesWhere(row, where) {
 			newRows = append(newRows, row)
+		} else {
+			rowsAffected++
 		}
 	}
 
-	// Write back remaining rows
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows matched the WHERE clause")
+	}
+
+	// Write remaining rows back to B-tree
 	return s.writeRows(tableName, newRows)
 }
 
@@ -240,7 +254,7 @@ func (s *BTreeStorage) Close() error {
 	return s.file.Close()
 }
 
-func (s *BTreeStorage) GetTable(tableName string) *Table {
+func (s *BTreeStorage) GetTable(tableName string) *types.Table {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.tables[tableName]
@@ -352,13 +366,13 @@ func (s *BTreeStorage) readNode(offset int64) (*BTreeNode, error) {
 	return node, nil
 }
 
-func (s *BTreeStorage) writeTable(table *Table) error {
+func (s *BTreeStorage) writeTable(table *types.Table) error {
 	// For simplicity, we'll store table metadata in memory
 	// In a real implementation, you would want to persist this to disk
 	return nil
 }
 
-func (s *BTreeStorage) insertRow(tableName string, row Row) error {
+func (s *BTreeStorage) insertRow(tableName string, row types.Row) error {
 	// Convert row to bytes
 	key := fmt.Sprintf("%s:%d", tableName, len(row)) // Simple key format
 	value, err := encodeRow(row)
@@ -522,8 +536,8 @@ func (s *BTreeStorage) splitChild(parent *BTreeNode, i int, child *BTreeNode) er
 	return nil
 }
 
-func (s *BTreeStorage) readRows(tableName string) ([]Row, error) {
-	var rows []Row
+func (s *BTreeStorage) readRows(tableName string) ([]types.Row, error) {
+	var rows []types.Row
 	root, err := s.readNode(s.root)
 	if err != nil {
 		return nil, err
@@ -532,7 +546,7 @@ func (s *BTreeStorage) readRows(tableName string) ([]Row, error) {
 	return s.readRowsFromNode(root, tableName, rows)
 }
 
-func (s *BTreeStorage) readRowsFromNode(node *BTreeNode, tableName string, rows []Row) ([]Row, error) {
+func (s *BTreeStorage) readRowsFromNode(node *BTreeNode, tableName string, rows []types.Row) ([]types.Row, error) {
 	for i := 0; i < node.numKeys; i++ {
 		if !node.isLeaf {
 			child, err := s.readNode(node.children[i])
@@ -569,9 +583,9 @@ func (s *BTreeStorage) readRowsFromNode(node *BTreeNode, tableName string, rows 
 	return rows, nil
 }
 
-func (s *BTreeStorage) writeRows(tableName string, rows []Row) error {
+func (s *BTreeStorage) writeRows(tableName string, rows []types.Row) error {
 	// Delete all existing rows for this table
-	if err := s.Delete(tableName, ""); err != nil {
+	if err := s.Delete(tableName, nil); err != nil {
 		return err
 	}
 
@@ -587,12 +601,12 @@ func (s *BTreeStorage) writeRows(tableName string, rows []Row) error {
 
 // Helper functions for encoding/decoding rows
 
-func encodeRow(row Row) ([]byte, error) {
+func encodeRow(row types.Row) ([]byte, error) {
 	return json.Marshal(row)
 }
 
-func decodeRow(data []byte) (Row, error) {
-	var row Row
+func decodeRow(data []byte) (types.Row, error) {
+	var row types.Row
 	err := json.Unmarshal(data, &row)
 	return row, err
 }
@@ -629,7 +643,7 @@ func (s *BTreeStorage) validateDataType(value interface{}, columnType string) er
 	return nil
 }
 
-func (s *BTreeStorage) validateColumns(table *Table, columns []string) error {
+func (s *BTreeStorage) validateColumns(table *types.Table, columns []string) error {
 	if len(columns) == 1 && columns[0] == "*" {
 		return nil
 	}
@@ -647,7 +661,7 @@ func (s *BTreeStorage) validateColumns(table *Table, columns []string) error {
 	return nil
 }
 
-func (s *BTreeStorage) validateColumnNames(table *Table, values map[string]interface{}) error {
+func (s *BTreeStorage) validateColumnNames(table *types.Table, values map[string]interface{}) error {
 	columnMap := make(map[string]bool)
 	for _, col := range table.Columns {
 		columnMap[col.Name] = true
@@ -661,8 +675,8 @@ func (s *BTreeStorage) validateColumnNames(table *Table, values map[string]inter
 	return nil
 }
 
-func (s *BTreeStorage) validateWhereColumns(table *Table, where string) error {
-	if where == "" {
+func (s *BTreeStorage) validateWhereColumns(table *types.Table, where map[string]interface{}) error {
+	if where == nil {
 		return nil
 	}
 
@@ -671,16 +685,26 @@ func (s *BTreeStorage) validateWhereColumns(table *Table, where string) error {
 		columnMap[col.Name] = true
 	}
 
-	// Split on AND but preserve the AND tokens
-	parts := strings.Split(where, " AND ")
-	for _, part := range parts {
-		// Split on spaces to get the column name
-		conditionParts := strings.Fields(strings.TrimSpace(part))
-		if len(conditionParts) > 0 && !columnMap[conditionParts[0]] {
-			return fmt.Errorf("invalid column name in WHERE clause: %s", conditionParts[0])
+	for colName := range where {
+		if !columnMap[colName] {
+			return fmt.Errorf("invalid column name in WHERE clause: %s", colName)
 		}
 	}
 	return nil
+}
+
+func (s *BTreeStorage) matchesWhere(row types.Row, where map[string]interface{}) bool {
+	if where == nil {
+		return true
+	}
+
+	for col, val := range where {
+		rowVal, ok := row[col]
+		if !ok || rowVal != val {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *BTreeStorage) ShowTables() ([]string, error) {

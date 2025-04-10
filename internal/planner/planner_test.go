@@ -38,7 +38,7 @@ func TestPlanSelect(t *testing.T) {
 				Type:    "SELECT",
 				Table:   "tablex",
 				Columns: []string{"a"},
-				Where:   "a = 1",
+				Where:   map[string]interface{}{"a": float64(1)},
 			},
 		},
 	}
@@ -102,7 +102,7 @@ func TestPlanUpdate(t *testing.T) {
 				Set: map[string]interface{}{
 					"a": float64(1),
 				},
-				Where: "b = 2",
+				Where: map[string]interface{}{"b": float64(2)},
 			},
 		},
 	}
@@ -133,7 +133,7 @@ func TestPlanDelete(t *testing.T) {
 			expected: &Plan{
 				Type:  "DELETE",
 				Table: "tablex",
-				Where: "a = 1",
+				Where: map[string]interface{}{"a": float64(1)},
 			},
 		},
 	}

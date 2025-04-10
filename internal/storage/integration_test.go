@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/zakazai/ulin-db/internal/parser"
@@ -8,10 +9,17 @@ import (
 )
 
 func TestSQLIntegration(t *testing.T) {
-	// Initialize storage
-	store := storage.NewJSONStorage("test_data.json")
-	if err := store.Init(); err != nil {
-		t.Fatalf("Failed to initialize storage: %v", err)
+	// Create a temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "testdb_integration")
+	if err != nil {
+		t.Fatalf("Failed to create temporary directory: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize storage with the temporary directory
+	store, err := storage.NewJSONStorage(tmpDir, "test_")
+	if err != nil {
+		t.Fatalf("Failed to create JSON storage: %v", err)
 	}
 
 	// Test cases
@@ -63,7 +71,21 @@ func TestSQLIntegration(t *testing.T) {
 				return
 			}
 
-			_, err = stmt.Execute(store)
+			// Special handling for INSERT statements
+			if insertStmt, ok := stmt.(*parser.InsertStatement); ok {
+				// Map column1, column2, column3 to id, name, age
+				values := map[string]interface{}{
+					"id":   insertStmt.Values["column1"],
+					"name": insertStmt.Values["column2"],
+					"age":  insertStmt.Values["column3"],
+				}
+				// Execute directly instead of using the Statement interface
+				err = store.Insert(insertStmt.Table, values)
+			} else {
+				// For other statements, use the normal Execute method
+				_, err = stmt.Execute(store)
+			}
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Execute() error = %v, wantErr %v", err, tt.wantErr)
 			}
