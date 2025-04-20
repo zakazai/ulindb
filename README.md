@@ -5,9 +5,11 @@ A lightweight SQL database built in Go for educational purposes. UlinDB helps un
 ## Features
 
 - Simple SQL syntax support
-- Multiple storage engines (BTree, JSON, In-Memory)
+- Hybrid storage architecture (OLTP + OLAP)
+- Apache Parquet support for analytical queries
+- BTree storage for transactional workloads
+- Automatic query routing based on workload type
 - Custom-built lexer and parser
-- Disk persistence with BTree storage
 - Basic CRUD operations
 
 ## Architecture
@@ -20,23 +22,27 @@ graph TD
     CMD --> Lexer[internal/lexer]
     CMD --> Parser[internal/parser]
     CMD --> Planner[internal/planner]
-    CMD --> Storage[internal/storage]
+    CMD --> HybridStorage[internal/storage/hybrid]
     
     Lexer --> Parser
     Parser --> Planner
-    Planner --> Storage
+    Planner --> HybridStorage
     
-    Storage --> BTree[BTree Storage]
-    Storage --> JSON[JSON Storage]
-    Storage --> Memory[In-Memory Storage]
+    HybridStorage --> BTree[BTree Storage]
+    HybridStorage --> Parquet[Parquet Storage]
+    BTree -.-> |sync| Parquet
+    
+    HybridStorage --> JSON[JSON Storage]
+    HybridStorage --> Memory[In-Memory Storage]
     
     Types[internal/types] --> Lexer
     Types --> Parser
     Types --> Planner
-    Types --> Storage
+    Types --> HybridStorage
     
     subgraph "Data Storage"
         BTree
+        Parquet
         JSON
         Memory
     end
@@ -45,6 +51,10 @@ graph TD
         Lexer
         Parser
         Planner
+    end
+    
+    subgraph "Query Routing"
+        HybridStorage
     end
 ```
 
@@ -57,26 +67,38 @@ sequenceDiagram
     participant Lexer as internal/lexer/lexer.go
     participant Parser as internal/parser/parser.go
     participant Statement as Statement.Execute()
-    participant Storage as internal/storage
-    participant BTree as BTree Storage Engine
+    participant Hybrid as HybridStorage
+    participant BTree as BTree Storage (OLTP)
+    participant Parquet as Parquet Storage (OLAP)
     
     User->>Main: SQL Query Input
     Main->>Lexer: Raw SQL Text
     Lexer->>Parser: Token Stream
     Parser->>Main: AST (Statement)
     
-    alt INSERT Statement
-        Main->>Storage: Direct Table Manipulation
-    else Other Statement
+    alt INSERT/UPDATE/DELETE
         Main->>Statement: Execute Statement
-        Statement->>Storage: Storage Operations
+        Statement->>Hybrid: Write Operation
+        Hybrid->>BTree: Forward Write Operation
+    else SELECT Query
+        Main->>Statement: Execute Statement
+        Statement->>Hybrid: Read Operation
+        
+        alt OLAP Query (Analytics)
+            Hybrid->>Parquet: Forward to OLAP Engine
+            Parquet-->>Hybrid: Query Results
+        else OLTP Query (Transactional)
+            Hybrid->>BTree: Forward to OLTP Engine
+            BTree-->>Hybrid: Query Results
+        end
     end
     
-    Storage->>BTree: Read/Write Operations
-    BTree-->>Storage: Data/Results
-    Storage-->>Statement: Results
+    Hybrid-->>Statement: Results
     Statement-->>Main: Formatted Results
     Main-->>User: Display Results Table
+    
+    note over BTree,Parquet: Background Sync Process
+    BTree->>Parquet: Periodic Sync (One-way)
 ```
 
 ### Understanding the Architecture
@@ -95,9 +117,18 @@ The UlinDB architecture is designed with modularity in mind, separating concerns
    - User input is processed by the main application
    - The lexer tokenizes the SQL statement
    - The parser converts tokens into a structured AST
-   - INSERT statements are handled specially for column mapping
-   - The statement executes against the selected storage engine
+   - The hybrid storage system routes queries based on their characteristics:
+     - Write operations (INSERT/UPDATE/DELETE) go to BTree storage
+     - OLAP queries (analytics) go to Parquet storage
+     - OLTP queries (transactions) go to BTree storage
    - Results are formatted and returned to the user
+
+3. **Hybrid Storage System:**
+   - The `HybridStorage` acts as a router that directs operations to the appropriate engine
+   - Data is persisted primarily in BTree storage (the "source of truth")
+   - Parquet serves as a read-optimized replica for analytical workloads
+   - A background syncing process keeps Parquet data updated from BTree
+   - The routing logic analyzes query patterns to determine OLTP vs OLAP workloads
 
 This clean separation makes it easy to modify or extend individual components without affecting the rest of the system.
 
@@ -195,13 +226,24 @@ Run a specific test:
 go test ./internal/lexer -run=TestLexer/Select_single_column -v
 ```
 
-### Storage Engines
+### Hybrid Storage Architecture
 
-UlinDB supports multiple storage engines:
+UlinDB uses a hybrid storage approach that combines different storage engines to optimize for different workloads:
 
-1. **BTree (Default)**: Persistent on-disk storage using a custom B-tree implementation
-2. **JSON**: Simple file-based storage using JSON files
-3. **In-Memory**: Volatile storage for testing and development
+1. **BTree Storage**: Optimized for OLTP (Online Transaction Processing)
+   - Handles writes (INSERT, UPDATE, DELETE)
+   - Efficiently serves point queries with specific WHERE clauses
+   - Uses a custom B+tree implementation for quick lookups
+
+2. **Parquet Storage**: Optimized for OLAP (Online Analytical Processing)
+   - Handles analytical queries (full table scans, aggregations)
+   - Columnar storage format for efficient data analytics
+   - Read-only replica that syncs from BTree storage
+
+3. **Query Router**: Automatically directs queries to the appropriate storage engine
+   - OLTP queries (specific lookups) → BTree Storage
+   - OLAP queries (analytical queries) → Parquet Storage
+   - Fallback mechanism if data isn't available in Parquet
 
 ```mermaid
 classDiagram
@@ -216,15 +258,26 @@ classDiagram
         +GetTable(tableName)
     }
     
+    class HybridStorage {
+        -oltp Storage
+        -olap Storage
+        +IsOLAPQuery()
+        +SyncNow()
+    }
+    
     class BTreeStorage {
         -file *os.File
         -root int64
         -tables map
         -pagePool sync.Pool
-        +writeNode(node)
-        +readNode(offset)
-        +insert(key, value)
-        +splitChild(parent, i, child)
+    }
+    
+    class ParquetStorage {
+        -dataDir string
+        -tables map
+        -syncFromBTree Storage
+        +SetSyncInterval()
+        +SyncFromBTree()
     }
     
     class JSONStorage {
@@ -238,51 +291,57 @@ classDiagram
         -data map
     }
     
+    Storage <|-- HybridStorage
     Storage <|.. BTreeStorage
+    Storage <|.. ParquetStorage
     Storage <|.. JSONStorage
     Storage <|.. InMemoryStorage
     
-    class BTreeNode {
-        +isLeaf bool
-        +numKeys int
-        +keys []string
-        +values [][]byte
-        +children []int64
-    }
-    
-    BTreeStorage --> BTreeNode
+    HybridStorage --> BTreeStorage : OLTP operations
+    HybridStorage --> ParquetStorage : OLAP queries
+    ParquetStorage ..> BTreeStorage : syncs from
 ```
 
-To change the storage engine, modify the `main.go` file in the `cmd/ulindb` directory by updating the storage configuration:
+### Storage Engine Configuration
+
+UlinDB uses a hybrid storage system by default, but you can configure it in the `main.go` file:
 
 ```go
-// Use BTree storage (default)
+// Default hybrid storage configuration (OLTP + OLAP)
 config := storage.StorageConfig{
-    Type:     storage.BTreeStorageType,
+    Type:          storage.BTreeStorageType, // Primary storage
+    FilePath:      "data/ulindb.btree",      // BTree storage path
+    DataDir:       "data/parquet",           // Parquet storage directory
+    SyncInterval:  time.Minute * 5,          // Sync every 5 minutes
+}
+
+// Create hybrid storage
+hybridStorage, err := storage.CreateHybridStorage(config)
+
+// Or use a single storage engine
+config := storage.StorageConfig{
+    Type:     storage.BTreeStorageType,     // Or JSONStorageType, ParquetStorageType, InMemoryStorageType
     FilePath: "data/ulindb.btree",
 }
-
-// Or use JSON storage
-config := storage.StorageConfig{
-    Type:       storage.JSONStorageType,
-    DataDir:    "data",
-    FilePrefix: "db_",
-}
-
-// Or use in-memory storage
-config := storage.StorageConfig{
-    Type: storage.InMemoryStorageType,
-}
-
 s, err := storage.NewStorage(config)
 ```
 
-### Viewing BTree Storage
+### Viewing Storage Contents
+
+#### BTree Storage (OLTP)
 
 To examine the contents of a BTree database file:
 
 ```
 ./scripts/view_btree.sh data/ulindb.btree
+```
+
+#### Parquet Storage (OLAP)
+
+To view the contents of a Parquet table:
+
+```
+./scripts/view_parquet.sh data/parquet users
 ```
 
 ## Contributing
@@ -301,14 +360,21 @@ Currently supported SQL operations:
 
 ## Future Enhancements
 
-- Index support
+- More advanced OLAP capabilities:
+  - Aggregation functions (SUM, AVG, COUNT)
+  - GROUP BY support
+  - Window functions
+- Two-way synchronization between storage engines
 - JOIN operations
 - Transactions
-- More complex WHERE expressions
+- Complex WHERE expressions
 - Additional data types
+- Query optimization for hybrid storage
 
 ## Credits
 
 - [toydb](https://github.com/erikgrinaker/toydb)
 - [gosql](https://github.com/eatonphil/gosql)
 - [Material SQL](https://github.com/MaterializeInc/materialize)
+- [Apache Parquet](https://parquet.apache.org/)
+- [parquet-go](https://github.com/xitongsys/parquet-go)

@@ -4,7 +4,6 @@
 
 # Parse input parameters
 FILE_PATH=${1:-"data/ulindb.btree"}
-TEMP_FILE=/tmp/ulindb_btree_dump.json
 
 # Check if file exists
 if [ ! -f "$FILE_PATH" ]; then
@@ -13,175 +12,125 @@ if [ ! -f "$FILE_PATH" ]; then
     exit 1
 fi
 
-# Create a simple helper Go program to dump BTree contents
-cat > /tmp/btree_dump.go << 'EOF'
-package main
+# Create a temporary Python script to view BTree file
+cat > /tmp/btree_viewer.py << 'EOF'
+import sys
+import os
+import json
+import struct
 
-import (
-    "encoding/binary"
-    "encoding/json"
-    "fmt"
-    "os"
-)
-
-func main() {
-    if len(os.Args) < 2 {
-        fmt.Println("Usage: go run btree_dump.go <btree_file_path>")
-        os.Exit(1)
-    }
-
-    filePath := os.Args[1]
-    file, err := os.Open(filePath)
-    if err != nil {
-        fmt.Printf("Error opening file: %v\n", err)
-        os.Exit(1)
-    }
-    defer file.Close()
-
-    // Get file info
-    fileInfo, err := file.Stat()
-    if err != nil {
-        fmt.Printf("Error getting file info: %v\n", err)
-        os.Exit(1)
-    }
-
-    if fileInfo.Size() == 0 {
-        fmt.Println("BTree file is empty")
-        os.Exit(0)
-    }
-
-    pageSize := 4096 // Same as in btree_storage.go
-    numPages := (fileInfo.Size() + int64(pageSize) - 1) / int64(pageSize)
-    
-    // Output structured JSON
-    result := map[string]interface{}{
-        "file_size": fileInfo.Size(),
-        "num_pages": numPages,
-        "pages": []interface{}{},
-    }
-
-    pages := []interface{}{}
-    
-    // Read root offset
-    var rootOffset int64
-    binary.Read(file, binary.BigEndian, &rootOffset)
-    result["root_offset"] = rootOffset
-
-    // Read each page
-    buffer := make([]byte, pageSize)
-    for i := int64(0); i < numPages; i++ {
-        offset := i * int64(pageSize)
+def read_btree_file(file_path):
+    """Read and parse a BTree file."""
+    if not os.path.exists(file_path):
+        print(f"Error: File {file_path} does not exist")
+        sys.exit(1)
         
-        // Read the page
-        _, err := file.Seek(offset, 0)
-        if err != nil {
-            fmt.Printf("Error seeking to page %d: %v\n", i, err)
-            continue
+    with open(file_path, 'rb') as f:
+        # Get file size
+        f.seek(0, 2)
+        file_size = f.tell()
+        f.seek(0)
+        
+        if file_size == 0:
+            return {"file_size": 0, "num_pages": 0, "pages": []}
+            
+        # Read root offset
+        root_offset = struct.unpack('>q', f.read(8))[0]
+        
+        # Calculate number of pages (assuming 4096-byte pages)
+        page_size = 4096
+        num_pages = (file_size + page_size - 1) // page_size
+        
+        result = {
+            "file_size": file_size,
+            "num_pages": num_pages,
+            "root_offset": root_offset,
+            "pages": []
         }
         
-        n, err := file.Read(buffer)
-        if err != nil {
-            fmt.Printf("Error reading page %d: %v\n", i, err)
-            continue
-        }
-        
-        if n < 16 { // Need at least header
-            continue
-        }
-        
-        // Extract node data
-        numKeys := binary.BigEndian.Uint64(buffer[0:])
-        isLeaf := binary.BigEndian.Uint64(buffer[8:]) == 1
-        
-        page := map[string]interface{}{
-            "page_num": i,
-            "offset": offset,
-            "is_root": offset == rootOffset,
-            "is_leaf": isLeaf,
-            "num_keys": numKeys,
-            "keys": []interface{}{},
-            "values": []interface{}{},
-        }
+        # Read each page
+        for page_num in range(num_pages):
+            page_offset = page_num * page_size
+            f.seek(page_offset)
+            
+            # Read page data
+            page_data = f.read(page_size)
+            if len(page_data) < 16:  # Need at least header
+                continue
+                
+            # Parse header
+            num_keys = struct.unpack('>q', page_data[0:8])[0]
+            is_leaf = struct.unpack('>q', page_data[8:16])[0] == 1
+            
+            page = {
+                "page_num": page_num,
+                "offset": page_offset,
+                "is_root": page_offset == root_offset,
+                "is_leaf": is_leaf,
+                "num_keys": num_keys,
+                "keys": [],
+                "values": []
+            }
+            
+            # Parse keys and values
+            offset = 16  # Skip header
+            for i in range(num_keys):
+                if offset + 4 > len(page_data):
+                    break
+                    
+                # Read key
+                key_len = struct.unpack('>I', page_data[offset:offset+4])[0]
+                offset += 4
+                
+                if offset + key_len > len(page_data):
+                    break
+                    
+                key = page_data[offset:offset+key_len].decode('utf-8', errors='replace')
+                offset += key_len
+                
+                # Read value
+                if offset + 4 > len(page_data):
+                    break
+                    
+                value_len = struct.unpack('>I', page_data[offset:offset+4])[0]
+                offset += 4
+                
+                if offset + value_len > len(page_data):
+                    break
+                
+                # Try to parse value as JSON
+                value_bytes = page_data[offset:offset+value_len]
+                try:
+                    value = json.loads(value_bytes)
+                except:
+                    value = f"<binary data: {value_len} bytes>"
+                    
+                offset += value_len
+                
+                page["keys"].append(key)
+                page["values"].append(value)
+                
+            result["pages"].append(page)
+            
+        return result
 
-        // Extract keys and values
-        keys := []interface{}{}
-        values := []interface{}{}
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python btree_viewer.py <btree_file>")
+        sys.exit(1)
         
-        bufOffset := int64(16) // Skip header
-        pageSizeInt64 := int64(pageSize)
-        
-        for j := uint64(0); j < numKeys && bufOffset < pageSizeInt64-8; j++ {
-            // Read key
-            if bufOffset+4 > pageSizeInt64 {
-                break
-            }
-            keyLen := binary.BigEndian.Uint32(buffer[bufOffset:])
-            bufOffset += 4
-            
-            if bufOffset+int64(keyLen) > pageSizeInt64 {
-                break
-            }
-            key := string(buffer[bufOffset:bufOffset+int64(keyLen)])
-            bufOffset += int64(keyLen)
-            
-            // Read value
-            if bufOffset+4 > pageSizeInt64 {
-                break
-            }
-            valueLen := binary.BigEndian.Uint32(buffer[bufOffset:])
-            bufOffset += 4
-            
-            if bufOffset+int64(valueLen) > pageSizeInt64 {
-                break
-            }
-            
-            // Try to decode value as JSON
-            valueBytes := buffer[bufOffset:bufOffset+int64(valueLen)]
-            var valueObj interface{}
-            if err := json.Unmarshal(valueBytes, &valueObj); err == nil {
-                values = append(values, valueObj)
-            } else {
-                values = append(values, fmt.Sprintf("<binary data: %d bytes>", valueLen))
-            }
-            
-            bufOffset += int64(valueLen)
-            
-            keys = append(keys, key)
-        }
-        
-        page["keys"] = keys
-        page["values"] = values
-        
-        pages = append(pages, page)
-    }
+    file_path = sys.argv[1]
+    result = read_btree_file(file_path)
     
-    result["pages"] = pages
-    
-    // Output as formatted JSON
-    jsonData, err := json.MarshalIndent(result, "", "  ")
-    if err != nil {
-        fmt.Printf("Error formatting JSON: %v\n", err)
-        os.Exit(1)
-    }
-    
-    fmt.Println(string(jsonData))
-}
+    # Pretty print JSON
+    print(json.dumps(result, indent=2))
+
+if __name__ == "__main__":
+    main()
 EOF
 
-# Compile and run the helper program
+# Run the Python script
 echo "Analyzing BTree file: $FILE_PATH"
-go run /tmp/btree_dump.go "$FILE_PATH" > "$TEMP_FILE"
+python3 /tmp/btree_viewer.py "$FILE_PATH"
 
-# Check if jq is available
-if command -v jq &> /dev/null; then
-    # Pretty-print the JSON with jq if available
-    jq . "$TEMP_FILE"
-    echo -e "\nDetailed structure saved to $TEMP_FILE"
-else
-    # Otherwise just cat the file
-    cat "$TEMP_FILE"
-    echo -e "\nInstall 'jq' for better formatting. Output saved to $TEMP_FILE"
-fi
-
-# Make the file executable
 chmod +x "$0"

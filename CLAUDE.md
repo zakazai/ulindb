@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Check for issues: `go vet ./...`
 - Manage dependencies: `go mod tidy`
 - View BTree storage: `./scripts/view_btree.sh [path/to/btree_file]`
+- View Parquet storage: `./scripts/view_parquet.sh [parquet_dir] [table_name]`
+- Force sync to Parquet: Use `hybridStorage.SyncNow()` in code
 
 ## Project Structure
 - `cmd/ulindb`: Entry point for the SQL server
@@ -25,7 +27,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `data`: Database file storage location
 
 ## Storage Engines
-- Default: BTree (persistent on-disk storage)
+- Hybrid Storage (Default): Uses BTree for OLTP and Parquet for OLAP queries
+- BTree: Persistent on-disk storage optimized for transactional workloads
+- Parquet: Columnar storage format optimized for analytical queries
 - Also supports: InMemory and JSON
 - Configure in cmd/ulindb/main.go via storage.StorageConfig
 

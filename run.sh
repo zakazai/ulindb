@@ -14,6 +14,7 @@ fi
 echo "Cleaning up old data..."
 rm -rf data
 mkdir -p data
+mkdir -p data/parquet
 
 # Create btree database file
 touch data/ulindb.btree
