@@ -42,11 +42,28 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "\n${GREEN}The UlinDB SQL server is ready to use.${NC}"
     echo "Run './ulindb' to start an interactive session"
     
-    # Run sample query to demonstrate
-    echo -e "\n${BLUE}Sample query:${NC}"
-    echo "CREATE TABLE users (id INT, name STRING);" | ./ulindb
-    echo "INSERT INTO users VALUES (1, 'Demo User');" | ./ulindb
-    echo "SELECT * FROM users;" | ./ulindb
+    # Run sample queries in a single database session to demonstrate
+    echo -e "\n${BLUE}Sample queries:${NC}"
+    
+    # Create a temporary file for the script
+    DEMO_SCRIPT=$(mktemp)
+    cat << EOF > $DEMO_SCRIPT
+CREATE TABLE users (id INT, name STRING);
+INSERT INTO users VALUES (1, 'Demo User');
+SELECT * FROM users;
+exit
+EOF
+    
+    # Show the commands that will be run
+    echo -e "${YELLOW}Commands:${NC}"
+    cat $DEMO_SCRIPT | grep -v "exit" | sed 's/^/  /'
+    
+    # Run the commands
+    echo -e "\n${YELLOW}Output:${NC}"
+    cat $DEMO_SCRIPT | ./ulindb | grep -v "UlinDB SQL Server\|Type 'exit'\|Goodbye" | sed 's/^/  /'
+    
+    # Clean up
+    rm -f $DEMO_SCRIPT
 else
     echo -e "${RED}Integration tests failed!${NC}"
 fi
