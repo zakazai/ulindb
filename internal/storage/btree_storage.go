@@ -76,13 +76,26 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 			return nil, err
 		}
 		storage.root = offset
+		
+		// Write root offset to file header
+		file.Seek(0, 0)
+		if err := binary.Write(file, binary.BigEndian, offset); err != nil {
+			return nil, err
+		}
 	} else {
 		// Read root offset from file header
+		file.Seek(0, 0)
 		var rootOffset int64
 		if err := binary.Read(file, binary.BigEndian, &rootOffset); err != nil {
 			return nil, err
 		}
 		storage.root = rootOffset
+		
+		// Load table metadata from the B-tree
+		if err := storage.loadTables(); err != nil {
+			fmt.Printf("Warning: Error loading tables: %v\n", err)
+			// Continue anyway, as this might be a new file
+		}
 	}
 
 	return storage, nil
@@ -367,9 +380,17 @@ func (s *BTreeStorage) readNode(offset int64) (*BTreeNode, error) {
 }
 
 func (s *BTreeStorage) writeTable(table *types.Table) error {
-	// For simplicity, we'll store table metadata in memory
-	// In a real implementation, you would want to persist this to disk
-	return nil
+	// Serialize table metadata to JSON
+	tableJSON, err := json.Marshal(table)
+	if err != nil {
+		return fmt.Errorf("failed to serialize table metadata: %v", err)
+	}
+	
+	// Create a special key for table metadata
+	key := fmt.Sprintf("__table__%s", table.Name)
+	
+	// Store in BTree
+	return s.insert(key, tableJSON)
 }
 
 func (s *BTreeStorage) insertRow(tableName string, row types.Row) error {
@@ -716,4 +737,59 @@ func (s *BTreeStorage) ShowTables() ([]string, error) {
 		tables = append(tables, name)
 	}
 	return tables, nil
+}
+
+// loadTables scans the BTree for table metadata and loads it into memory
+func (s *BTreeStorage) loadTables() error {
+	root, err := s.readNode(s.root)
+	if err != nil {
+		return err
+	}
+
+	// Recursively scan all nodes for table metadata
+	return s.loadTablesFromNode(root)
+}
+
+// loadTablesFromNode recursively scans a node and its children for table metadata
+func (s *BTreeStorage) loadTablesFromNode(node *BTreeNode) error {
+	for i := 0; i < node.numKeys; i++ {
+		// Check each key to see if it's a table metadata key
+		if strings.HasPrefix(node.keys[i], "__table__") {
+			// Extract table name from key
+			tableName := strings.TrimPrefix(node.keys[i], "__table__")
+			
+			// Deserialize table metadata
+			var table types.Table
+			if err := json.Unmarshal(node.values[i], &table); err != nil {
+				return fmt.Errorf("failed to deserialize table metadata for %s: %v", tableName, err)
+			}
+			
+			// Store table in memory
+			s.tables[tableName] = &table
+		}
+
+		// Recursively check children if not a leaf node
+		if !node.isLeaf {
+			child, err := s.readNode(node.children[i])
+			if err != nil {
+				return err
+			}
+			if err := s.loadTablesFromNode(child); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Check the last child if not a leaf node
+	if !node.isLeaf {
+		child, err := s.readNode(node.children[node.numKeys])
+		if err != nil {
+			return err
+		}
+		if err := s.loadTablesFromNode(child); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

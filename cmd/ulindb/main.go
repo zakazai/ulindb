@@ -82,6 +82,20 @@ func main() {
 			break
 		}
 		
+		// Special command to force sync from BTree to Parquet
+		if strings.ToUpper(input) == "FORCE_SYNC;" {
+			fmt.Println("Forcing sync from BTree to Parquet storage...")
+			startTime := time.Now()
+			err := hybridStorage.SyncNow()
+			duration := time.Since(startTime)
+			if err != nil {
+				fmt.Printf("Error during sync: %v\n", err)
+			} else {
+				fmt.Printf("Sync completed in %v\n", duration)
+			}
+			continue
+		}
+		
 		// Handle EXPLAIN command for query execution plan
 		if strings.HasPrefix(strings.ToUpper(input), "EXPLAIN ") {
 			// Extract the actual query
