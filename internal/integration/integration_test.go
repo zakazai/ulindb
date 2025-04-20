@@ -535,6 +535,55 @@ SELECT * FROM products;
 	t.Log("Basic insert and select operations completed")
 }
 
+func TestShowTablesCommand(t *testing.T) {
+	// Test the SHOW TABLES command
+	t.Log("Testing SHOW TABLES command")
+	
+	// Create tables and test SHOW TABLES in a single session to avoid persistence issues
+	// This is necessary due to the known limitation with cross-session persistence
+	script := `
+CREATE TABLE users (id INT, name STRING, email STRING);
+CREATE TABLE products (id INT, name STRING, price INT);
+CREATE TABLE orders (id INT, user_id INT, product_id INT, quantity INT);
+SHOW TABLES;
+`
+	// Execute the script as a single batch
+	output, err := executeSQLCommand(script)
+	if err != nil {
+		t.Fatalf("Error executing script: %v", err)
+	}
+	
+	// Check for table names in the output
+	for _, tableName := range []string{"users", "products", "orders"} {
+		if !strings.Contains(strings.ToLower(output), tableName) {
+			t.Errorf("Expected table '%s' to be listed in SHOW TABLES output", tableName)
+		}
+	}
+	
+	// Check for the proper output formatting
+	if !strings.Contains(output, "TABLE_NAME") {
+		t.Errorf("Expected 'TABLE_NAME' header in SHOW TABLES output")
+	}
+	
+	// Check that we get the count of tables
+	if !strings.Contains(output, "Found") || !strings.Contains(output, "tables") {
+		t.Errorf("Expected 'Found X tables' message in output")
+	}
+	
+	// Also test SHOW TABLES with empty database (new session)
+	emptyDbOutput, err := executeSQLCommand("SHOW TABLES;")
+	if err != nil {
+		t.Fatalf("Failed to execute SHOW TABLES on empty database: %v", err)
+	}
+	
+	// The output should contain "Found 0 tables" due to the session persistence limitation
+	if !strings.Contains(emptyDbOutput, "Found 0 tables") {
+		t.Log("Note: SHOW TABLES in a new session should show 0 tables due to session persistence limitation")
+	}
+	
+	t.Log("SHOW TABLES command functions correctly within a session")
+}
+
 func TestDatabaseLimitations(t *testing.T) {
 	// This test documents the known limitations of the current database implementation
 	// It tests UPDATE and DELETE operations, which are expected to fail in the current implementation

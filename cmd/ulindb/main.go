@@ -96,6 +96,30 @@ func main() {
 			continue
 		}
 		
+		// Handle SHOW TABLES command to list all tables
+		if strings.ToUpper(input) == "SHOW TABLES;" {
+			fmt.Println("Fetching all tables...")
+			startTime := time.Now()
+			tables, err := s.ShowTables()
+			duration := time.Since(startTime)
+			
+			if err != nil {
+				fmt.Printf("Error getting tables: %v\n", err)
+			} else {
+				// Sort tables alphabetically for consistent output
+				sort.Strings(tables)
+				
+				fmt.Println("Results:")
+				fmt.Println("TABLE_NAME")
+				fmt.Println("---------")
+				for _, tableName := range tables {
+					fmt.Println(tableName)
+				}
+				fmt.Printf("\nFound %d tables in %v\n", len(tables), duration)
+			}
+			continue
+		}
+		
 		// Handle EXPLAIN command for query execution plan
 		if strings.HasPrefix(strings.ToUpper(input), "EXPLAIN ") {
 			// Extract the actual query
