@@ -17,8 +17,12 @@ func main() {
 	fmt.Println("UlinDB SQL Server")
 	fmt.Println("Type 'exit' to quit")
 
-	// Initialize storage
-	s, err := storage.NewJSONStorage("data", "db_")
+	// Initialize BTree storage
+	config := storage.StorageConfig{
+		Type:     storage.BTreeStorageType,
+		FilePath: "data/ulindb.btree",
+	}
+	s, err := storage.NewStorage(config)
 	if err != nil {
 		fmt.Printf("Error initializing storage: %v\n", err)
 		return
