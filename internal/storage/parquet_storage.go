@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/parquet"
-	"github.com/xitongsys/parquet-go/source"
+	"github.com/xitongsys/parquet-go/reader"
 	"github.com/xitongsys/parquet-go/writer"
 	"github.com/zakazai/ulin-db/internal/types"
 )
@@ -24,12 +25,12 @@ type ParquetRow struct {
 
 // ParquetStorage implements Storage interface using Parquet file format
 type ParquetStorage struct {
-	dataDir      string
-	tables       map[string]*types.Table
-	mu           sync.RWMutex
+	dataDir       string
+	tables        map[string]*types.Table
+	mu            sync.RWMutex
 	syncFromBTree Storage // Reference to the BTree storage for syncing
-	lastSync     time.Time
-	syncInterval time.Duration
+	lastSync      time.Time
+	syncInterval  time.Duration
 }
 
 // NewParquetStorage creates a new Parquet storage
@@ -121,7 +122,7 @@ func (s *ParquetStorage) writeRowsToParquet(tableName string, rows []types.Row) 
 
 	// Create Parquet file
 	filePath := filepath.Join(s.dataDir, fmt.Sprintf("%s.parquet", tableName))
-	fw, err := source.NewLocalFileWriter(filePath)
+	fw, err := local.NewLocalFileWriter(filePath)
 	if err != nil {
 		return err
 	}
@@ -194,7 +195,7 @@ func (s *ParquetStorage) Select(tableName string, columns []string, where map[st
 
 	// Read data from Parquet file
 	filePath := filepath.Join(s.dataDir, fmt.Sprintf("%s.parquet", tableName))
-	fr, err := source.NewLocalFileReader(filePath)
+	fr, err := local.NewLocalFileReader(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// If file doesn't exist, return empty result
@@ -313,7 +314,7 @@ func (s *ParquetStorage) GetLastSyncTime() time.Time {
 func parquetSchemaForTable(table *types.Table) string {
 	var schema strings.Builder
 	schema.WriteString("message schema {")
-	
+
 	for _, col := range table.Columns {
 		var parquetType string
 		switch col.Type {
@@ -324,10 +325,10 @@ func parquetSchemaForTable(table *types.Table) string {
 		default:
 			parquetType = "BYTE_ARRAY"
 		}
-		
+
 		schema.WriteString(fmt.Sprintf(" optional %s %s;", parquetType, col.Name))
 	}
-	
+
 	schema.WriteString(" }")
 	return schema.String()
 }

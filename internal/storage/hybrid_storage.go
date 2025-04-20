@@ -9,10 +9,18 @@ import (
 )
 
 // HybridStorage implements a hybrid storage system that routes queries
-// between OLTP (BTree) and OLAP (Parquet) storage engines based on the query type
+// between OLTP (BTree) and OLAP (Parquet) storage engines based on the query type.
+// This provides optimal performance for both transactional and analytical workloads.
 type HybridStorage struct {
-	oltp     Storage // Primary storage for OLTP operations (BTree)
-	olap     Storage // Secondary storage for OLAP operations (Parquet)
+	// oltp is the primary storage engine for transactional (OLTP) operations.
+	// It handles all writes and point queries efficiently.
+	oltp Storage
+
+	// olap is the secondary storage engine optimized for analytical (OLAP) operations.
+	// It is read-only and provides columnar access patterns for efficient analytics.
+	olap Storage
+
+	// syncTime records when data was last synchronized from OLTP to OLAP storage.
 	syncTime time.Time
 }
 
@@ -22,17 +30,17 @@ func IsOLAPQuery(columns []string, where map[string]interface{}) bool {
 	// 1. Query reads many columns (reporting/analytics)
 	// 2. No specific key lookup (range scan or full table scan)
 	// 3. Query contains aggregation (future enhancement)
-	
+
 	// If no WHERE clause or ID lookup, likely an analytical query
 	if where == nil || len(where) == 0 {
 		return true
 	}
-	
+
 	// If we're selecting all columns, likely an analytical query
 	if len(columns) == 0 || (len(columns) == 1 && columns[0] == "*") {
 		return true
 	}
-	
+
 	// Check if WHERE contains only ID fields (OLTP) or range conditions (OLAP)
 	idFieldNames := []string{"id", "ID", "Id", "_id", "pk"}
 	for col := range where {
@@ -43,13 +51,13 @@ func IsOLAPQuery(columns []string, where map[string]interface{}) bool {
 				break
 			}
 		}
-		
+
 		if !isIdField {
 			// Non-ID field in WHERE clause suggests OLAP
 			return true
 		}
 	}
-	
+
 	// Default to OLTP for safety
 	return false
 }
@@ -60,13 +68,13 @@ func (s *HybridStorage) CreateTable(table *types.Table) error {
 	if err := s.oltp.CreateTable(table); err != nil {
 		return err
 	}
-	
+
 	// Then propagate to OLAP
 	if err := s.olap.CreateTable(table); err != nil {
 		// This is not critical, so just log and continue
 		fmt.Printf("Warning: Failed to create table in OLAP storage: %v\n", err)
 	}
-	
+
 	return nil
 }
 
@@ -82,16 +90,16 @@ func (s *HybridStorage) Select(tableName string, columns []string, where map[str
 	if IsOLAPQuery(columns, where) {
 		// Try OLAP storage first
 		rows, err := s.olap.Select(tableName, columns, where)
-		
+
 		// If successful or error is not just "not found", return results
 		if err == nil || (err != nil && !strings.Contains(err.Error(), "does not exist")) {
 			return rows, err
 		}
-		
+
 		// Fall back to OLTP if OLAP fails
 		fmt.Printf("OLAP query failed, falling back to OLTP: %v\n", err)
 	}
-	
+
 	// Use OLTP storage
 	return s.oltp.Select(tableName, columns, where)
 }
@@ -111,13 +119,13 @@ func (s *HybridStorage) Delete(tableName string, where map[string]interface{}) e
 // Close implements Storage.Close by closing both storages
 func (s *HybridStorage) Close() error {
 	var oltpErr, olapErr error
-	
+
 	// Close OLTP storage
 	oltpErr = s.oltp.Close()
-	
+
 	// Close OLAP storage
 	olapErr = s.olap.Close()
-	
+
 	// Return first error encountered
 	if oltpErr != nil {
 		return oltpErr

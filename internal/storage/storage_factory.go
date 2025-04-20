@@ -3,27 +3,50 @@ package storage
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
+// StorageType represents different storage backends supported by the database.
 type StorageType string
 
 const (
+	// InMemoryStorageType is a volatile in-memory storage (for testing).
 	InMemoryStorageType StorageType = "memory"
-	JSONStorageType     StorageType = "json"
-	BTreeStorageType    StorageType = "btree"
-	ParquetStorageType  StorageType = "parquet"
+
+	// JSONStorageType stores data in JSON files with one file per table.
+	JSONStorageType StorageType = "json"
+
+	// BTreeStorageType stores data in a B+tree structure for OLTP workloads.
+	BTreeStorageType StorageType = "btree"
+
+	// ParquetStorageType stores data in column-oriented Parquet files for OLAP workloads.
+	ParquetStorageType StorageType = "parquet"
 )
 
+// StorageConfig provides configuration options for creating storage backends.
 type StorageConfig struct {
-	Type          StorageType
-	FilePath      string        // Used for BTree storage
-	DataDir       string        // Used for JSON and Parquet storage
-	FilePrefix    string        // Used for JSON storage
-	SyncFromBTree bool          // Used for Parquet storage to sync from BTree
-	SyncInterval  time.Duration // Used for Parquet storage sync interval
+	// Type specifies which storage implementation to use.
+	Type StorageType
+
+	// FilePath is the path to the BTree storage file.
+	FilePath string
+
+	// DataDir is the directory for JSON and Parquet storage files.
+	DataDir string
+
+	// FilePrefix is used as a prefix for JSON storage files.
+	FilePrefix string
+
+	// SyncFromBTree enables synchronizing Parquet storage from BTree.
+	SyncFromBTree bool
+
+	// SyncInterval controls how frequently Parquet syncs from BTree.
+	SyncInterval time.Duration
 }
 
-// NewStorage creates a new storage instance based on the provided configuration
+// NewStorage creates a new storage instance based on the provided configuration.
+// It will instantiate the appropriate storage implementation based on the config.Type
+// and initialize it with the relevant parameters from the config.
 func NewStorage(config StorageConfig) (Storage, error) {
 	switch config.Type {
 	case InMemoryStorageType:
@@ -52,58 +75,61 @@ func NewStorage(config StorageConfig) (Storage, error) {
 		if config.DataDir == "" {
 			return nil, fmt.Errorf("data directory is required for Parquet storage")
 		}
-		
+
 		parquetStorage, err := NewParquetStorage(config.DataDir)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Configure sync from BTree if enabled
 		if config.SyncFromBTree {
 			// Note: This requires the caller to later set the BTree source
 			// using SetBTreeSource method after creating both storages
-			
+
 			// Set sync interval if specified
 			if config.SyncInterval > 0 {
 				parquetStorage.SetSyncInterval(config.SyncInterval)
 			}
 		}
-		
+
 		return parquetStorage, nil
 	default:
 		return nil, fmt.Errorf("unsupported storage type: %s", config.Type)
 	}
 }
 
-// CreateHybridStorage creates a hybrid storage system with BTree for OLTP and Parquet for OLAP
+// CreateHybridStorage creates a hybrid storage system with BTree for OLTP and Parquet for OLAP.
+// This provides a complete storage solution that automatically routes queries to the optimal
+// storage engine based on the query patterns. It also sets up background synchronization to
+// keep the OLAP storage updated with data from the OLTP storage.
 func CreateHybridStorage(config StorageConfig) (*HybridStorage, error) {
 	if config.Type != BTreeStorageType {
 		return nil, fmt.Errorf("hybrid storage requires BTree as the primary storage type")
 	}
-	
+
 	// Create BTree storage
 	bTreeStorage, err := NewBTreeStorage(config.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BTree storage: %w", err)
 	}
-	
+
 	// Create Parquet storage
 	parquetStorage, err := NewParquetStorage(config.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Parquet storage: %w", err)
 	}
-	
+
 	// Configure Parquet to sync from BTree
 	parquetStorage.SetBTreeSource(bTreeStorage)
-	
+
 	// Set sync interval if specified
 	if config.SyncInterval > 0 {
 		parquetStorage.SetSyncInterval(config.SyncInterval)
 	}
-	
+
 	// Start sync worker
 	parquetStorage.StartSyncWorker()
-	
+
 	// Create hybrid storage
 	return &HybridStorage{
 		oltp: bTreeStorage,

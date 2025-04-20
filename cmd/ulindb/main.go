@@ -20,26 +20,26 @@ func main() {
 
 	// Initialize hybrid storage with BTree for OLTP and Parquet for OLAP
 	config := storage.StorageConfig{
-		Type:          storage.BTreeStorageType,
-		FilePath:      "data/ulindb.btree",
-		DataDir:       "data/parquet",
-		SyncInterval:  time.Minute * 5, // Sync every 5 minutes
+		Type:         storage.BTreeStorageType,
+		FilePath:     "data/ulindb.btree",
+		DataDir:      "data/parquet",
+		SyncInterval: time.Minute * 5, // Sync every 5 minutes
 	}
-	
+
 	// Create hybrid storage
 	hybridStorage, err := storage.CreateHybridStorage(config)
 	if err != nil {
 		fmt.Printf("Error initializing hybrid storage: %v\n", err)
 		return
 	}
-	
+
 	// Force initial sync to ensure data is available in Parquet
 	err = hybridStorage.SyncNow()
 	if err != nil {
 		fmt.Printf("Warning: Initial sync failed: %v\n", err)
 		// Continue anyway as this is not critical
 	}
-	
+
 	// Use hybrid storage for all operations
 	s := hybridStorage
 

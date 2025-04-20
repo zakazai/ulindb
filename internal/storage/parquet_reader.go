@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/reader"
-	"github.com/xitongsys/parquet-go/source"
 	"github.com/zakazai/ulin-db/internal/types"
 )
 
@@ -26,53 +26,53 @@ func NewParquetReader(dataDir string) *ParquetReader {
 // ReadTable reads all rows from a table's Parquet file
 func (r *ParquetReader) ReadTable(tableName string) ([]types.Row, error) {
 	filePath := filepath.Join(r.dataDir, fmt.Sprintf("%s.parquet", tableName))
-	
+
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		return []types.Row{}, nil
 	}
-	
+
 	// Open file
-	fr, err := source.NewLocalFileReader(filePath)
+	fr, err := local.NewLocalFileReader(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open Parquet file: %w", err)
 	}
 	defer fr.Close()
-	
+
 	// Create Parquet reader
 	pr, err := reader.NewParquetReader(fr, new(ParquetRow), 4)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Parquet reader: %w", err)
 	}
 	defer pr.ReadStop()
-	
+
 	// Get row count
 	numRows := int(pr.GetNumRows())
 	if numRows == 0 {
 		return []types.Row{}, nil
 	}
-	
+
 	// Read rows
 	parquetRows := make([]ParquetRow, numRows)
 	if err := pr.Read(&parquetRows); err != nil {
 		return nil, fmt.Errorf("failed to read Parquet rows: %w", err)
 	}
-	
+
 	// Convert to types.Row
 	rows := make([]types.Row, 0, numRows)
 	for _, prow := range parquetRows {
 		if prow.TableName != tableName {
 			continue
 		}
-		
+
 		var row types.Row
 		if err := json.Unmarshal([]byte(prow.DataJSON), &row); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal row data: %w", err)
 		}
-		
+
 		rows = append(rows, row)
 	}
-	
+
 	return rows, nil
 }
 
@@ -81,14 +81,14 @@ func (r *ParquetReader) ApplyFilter(rows []types.Row, where map[string]interface
 	if where == nil || len(where) == 0 {
 		return rows
 	}
-	
+
 	filtered := make([]types.Row, 0, len(rows))
 	for _, row := range rows {
 		if matchesWhere(row, where) {
 			filtered = append(filtered, row)
 		}
 	}
-	
+
 	return filtered
 }
 
@@ -97,27 +97,27 @@ func (r *ParquetReader) ApplyProjection(rows []types.Row, columns []string) []ty
 	if columns == nil || len(columns) == 0 {
 		return rows
 	}
-	
+
 	projected := make([]types.Row, len(rows))
 	for i, row := range rows {
 		projectedRow := make(types.Row)
-		
+
 		// Handle * projection
 		if len(columns) == 1 && columns[0] == "*" {
 			projected[i] = row
 			continue
 		}
-		
+
 		// Handle specific columns
 		for _, col := range columns {
 			if val, ok := row[col]; ok {
 				projectedRow[col] = val
 			}
 		}
-		
+
 		projected[i] = projectedRow
 	}
-	
+
 	return projected
 }
 
