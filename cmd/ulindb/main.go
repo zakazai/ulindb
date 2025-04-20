@@ -81,6 +81,44 @@ func main() {
 			fmt.Println("Goodbye!")
 			break
 		}
+		
+		// Handle EXPLAIN command for query execution plan
+		if strings.HasPrefix(strings.ToUpper(input), "EXPLAIN ") {
+			// Extract the actual query
+			query := strings.TrimSpace(input[8:])
+			fmt.Printf("Explaining query: %s\n", query)
+			
+			// Parse the query
+			l := lexer.New(query)
+			p := parser.New(l)
+			stmt, err := p.Parse()
+			if err != nil {
+				fmt.Printf("Error parsing statement: %v\n", err)
+				continue
+			}
+			
+			// Only support EXPLAIN for SELECT statements
+			if selectStmt, ok := stmt.(*parser.SelectStatement); ok {
+				isOLAP := storage.IsOLAPQuery(selectStmt.Columns, selectStmt.Where)
+				fmt.Println("======= Query Execution Plan =======")
+				fmt.Printf("Query Type: %s\n", map[bool]string{true: "OLAP (Analytical)", false: "OLTP (Transactional)"}[isOLAP])
+				fmt.Printf("Storage Engine: %s\n", map[bool]string{true: "Parquet", false: "BTree"}[isOLAP])
+				fmt.Printf("Table: %s\n", selectStmt.Table)
+				fmt.Printf("Columns: %v\n", selectStmt.Columns)
+				if len(selectStmt.Where) > 0 {
+					fmt.Println("Filters:")
+					for col, val := range selectStmt.Where {
+						fmt.Printf("  %s = %v\n", col, val)
+					}
+				} else {
+					fmt.Println("Filters: None (Full Table Scan)")
+				}
+				fmt.Println("===================================")
+			} else {
+				fmt.Println("EXPLAIN is currently only supported for SELECT statements")
+			}
+			continue
+		}
 
 		// Parse the SQL statement
 		l := lexer.New(input)
@@ -113,25 +151,50 @@ func main() {
 				}
 			}
 
-			// Execute the INSERT directly
+			// Execute the INSERT with timing
+			fmt.Printf("Executing INSERT operation on BTree storage...\n")
+			startTime := time.Now()
 			err = s.Insert(insertStmt.Table, values)
+			duration := time.Since(startTime)
+			
 			if err != nil {
 				fmt.Printf("Error executing statement: %v\n", err)
+			} else {
+				fmt.Printf("Successfully inserted record in %v\n", duration)
 			}
 			continue
 		}
 
-		// Execute other statement types
+		// Execute other statement types with timing
+		fmt.Printf("Executing statement...\n")
+		startTime := time.Now()
+		
+		// For SELECT statements, determine if OLAP or OLTP
+		if selectStmt, ok := stmt.(*parser.SelectStatement); ok {
+			isOLAP := storage.IsOLAPQuery(selectStmt.Columns, selectStmt.Where)
+			storageType := "BTree (OLTP)"
+			if isOLAP {
+				storageType = "Parquet (OLAP)"
+			}
+			fmt.Printf("Query classified as %s, using %s storage\n", 
+				map[bool]string{true: "analytical", false: "transactional"}[isOLAP],
+				storageType)
+		}
+		
 		result, err := stmt.(parser.Statement).Execute(s)
+		duration := time.Since(startTime)
+		
 		if err != nil {
 			fmt.Printf("Error executing statement: %v\n", err)
 			continue
 		}
 
-		// Print the result
+		// Print the result with timing information
+		fmt.Printf("Execution completed in %v\n", duration)
 		if result != nil {
 			// Check if result is a []types.Row from SELECT
 			if rows, ok := result.([]map[string]interface{}); ok {
+				fmt.Printf("Retrieved %d rows\n", len(rows))
 				printFormattedResults(rows)
 			} else {
 				fmt.Println(result)
