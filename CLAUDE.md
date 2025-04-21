@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commit Message Template
-When committing changes, use the following format:
+When committing changes, MUST use the following format:
 ```
 claude: fix: resolve specific issue
 
