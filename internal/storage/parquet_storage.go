@@ -18,9 +18,8 @@ import (
 
 // ParquetRow represents a row in Parquet format with dynamic columns
 type ParquetRow struct {
-	TableName string                 `parquet:"name=table_name, type=BYTE_ARRAY, convertedtype=UTF8"`
-	Data      map[string]interface{} `parquet:"-"` // This will be serialized to JSON
-	DataJSON  string                 `parquet:"name=data_json, type=BYTE_ARRAY, convertedtype=UTF8"`
+	TableName string `parquet:"name=table_name, type=BYTE_ARRAY, convertedtype=UTF8"`
+	DataJSON  string `parquet:"name=data_json, type=BYTE_ARRAY, convertedtype=UTF8"`
 }
 
 // ParquetStorage implements Storage interface using Parquet file format
