@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Commit Message Template
+When committing changes, use the following format:
+```
+fix: resolve specific issue
+
+Detailed description of what was fixed and how the solution works.
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+Use appropriate prefixes:
+- `feat:` for new features
+- `fix:` for bug fixes
+- `refactor:` for code restructuring
+- `docs:` for documentation changes
+- `test:` for test additions or modifications
+- `chore:` for maintenance tasks
+
 ## Development Commands
 - Build: `go build -o ulindb ./cmd/ulindb`
 - Run interactive mode: `./ulindb`
