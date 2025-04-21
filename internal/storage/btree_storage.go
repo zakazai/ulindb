@@ -599,11 +599,27 @@ func (s *BTreeStorage) insert(key string, value []byte) error {
 		
 		fmt.Printf("DEBUG: Wrote metadata key '%s' at offset %d\n", key, metadataOffset)
 	} else {
-		// For data rows, read the current data page to find existing rows
+		// For data rows, we'll use a different strategy to ensure we don't lose rows:
+		// Find the tableName from the key and store rows in pages by table
+
+		// Extract table name from key for organizing data
+		tableName := tableNameFromKey(key)
+		if tableName == "" {
+			return fmt.Errorf("could not determine table name from key: %s", key)
+		}
+
+		// Use a different page offset for each table to avoid conflicts
+		// We'll use a simple hash of the table name to determine the page
+		tableHash := 0
+		for _, c := range tableName {
+			tableHash = tableHash*31 + int(c)
+		}
+		pageIndex := 1 + (tableHash % 100) // Distribute across 100 possible pages
+		dataOffset := int64(8 + pageSize*pageIndex)
+		
+		// Read existing pages for this table
 		dataPage := s.pagePool.Get().([]byte)
 		defer s.pagePool.Put(dataPage)
-		
-		dataOffset := int64(8 + pageSize) // Start of data pages
 		
 		// Get current node info
 		bytesRead, err := s.file.ReadAt(dataPage, dataOffset)
@@ -651,7 +667,7 @@ func (s *BTreeStorage) insert(key string, value []byte) error {
 				bufOffset += int64(valueLen)
 			}
 			
-			fmt.Printf("DEBUG: Read existing data page with %d keys\n", numKeys)
+			fmt.Printf("DEBUG: Read existing data page with %d keys for table '%s'\n", numKeys, tableName)
 		} else {
 			// Create a new node
 			node = &BTreeNode{
@@ -661,25 +677,233 @@ func (s *BTreeStorage) insert(key string, value []byte) error {
 				values:   make([][]byte, maxKeys),
 				children: make([]int64, maxKeys+1),
 			}
-			fmt.Printf("DEBUG: Creating new data page\n")
+			fmt.Printf("DEBUG: Creating new data page for table '%s'\n", tableName)
 		}
 		
-		// Add our new key/value to the node
+		// Check if we need to add the row to this page
 		if node.numKeys < maxKeys {
+			// We have space in the current page
 			node.keys[node.numKeys] = key
 			node.values[node.numKeys] = value
 			node.numKeys++
-			fmt.Printf("DEBUG: Added key %s as item %d in data page\n", key, node.numKeys-1)
+			fmt.Printf("DEBUG: Added key %s as item %d in data page for table '%s'\n", key, node.numKeys-1, tableName)
 		} else {
-			fmt.Printf("DEBUG: Data page is full, dropping oldest entry to make room\n")
-			// Shift all entries left, losing the oldest one
-			for i := 0; i < maxKeys-1; i++ {
-				node.keys[i] = node.keys[i+1]
-				node.values[i] = node.values[i+1]
+			// Current page is full, we need to append to a new page
+			// Find the next available page for this table
+			nextPageOffset := dataOffset + pageSize
+			
+			// Check if the next page exists and has data related to this table
+			nextPage := s.pagePool.Get().([]byte)
+			defer s.pagePool.Put(nextPage)
+			
+			bytesRead, err := s.file.ReadAt(nextPage, nextPageOffset)
+			if err != nil && err != io.EOF {
+				fmt.Printf("DEBUG: Error reading next page: %v\n", err)
+				return err
 			}
-			// Add new entry at the end
-			node.keys[maxKeys-1] = key
-			node.values[maxKeys-1] = value
+			
+			if bytesRead > 0 {
+				// Next page exists, decode it and see if it has space
+				var nextNode *BTreeNode
+				var nextNumKeys int
+				
+				// Parse existing next page
+				bufOffset := int64(0)
+				nextNumKeys = int(binary.BigEndian.Uint64(nextPage[bufOffset:]))
+				bufOffset += 8
+				isLeaf := binary.BigEndian.Uint64(nextPage[bufOffset:]) == 1
+				bufOffset += 8
+				
+				// Create node from existing data
+				nextNode = &BTreeNode{
+					isLeaf:   isLeaf,
+					numKeys:  nextNumKeys,
+					keys:     make([]string, maxKeys),
+					values:   make([][]byte, maxKeys),
+					children: make([]int64, maxKeys+1),
+				}
+				
+				// Read existing keys/values from the next page
+				for i := 0; i < nextNumKeys; i++ {
+					// Read key
+					keyLen := binary.BigEndian.Uint32(nextPage[bufOffset:])
+					bufOffset += 4
+					if keyLen > 0 {
+						nextNode.keys[i] = string(nextPage[bufOffset : bufOffset+int64(keyLen)])
+					}
+					bufOffset += int64(keyLen)
+					
+					// Read value
+					valueLen := binary.BigEndian.Uint32(nextPage[bufOffset:])
+					bufOffset += 4
+					if valueLen > 0 {
+						nextNode.values[i] = make([]byte, valueLen)
+						copy(nextNode.values[i], nextPage[bufOffset:bufOffset+int64(valueLen)])
+					}
+					bufOffset += int64(valueLen)
+				}
+				
+				fmt.Printf("DEBUG: Current page full, checking next page at offset %d (has %d keys)\n", 
+					nextPageOffset, nextNumKeys)
+				
+				// If the next page has space, add the key/value
+				if nextNode.numKeys < maxKeys {
+					nextNode.keys[nextNode.numKeys] = key
+					nextNode.values[nextNode.numKeys] = value
+					nextNode.numKeys++
+					fmt.Printf("DEBUG: Added key '%s' to existing overflow page at index %d\n", 
+						key, nextNode.numKeys-1)
+				} else {
+					// Next page is full too, create a new overflow page
+					fmt.Printf("DEBUG: Overflow page is also full, creating another overflow page\n")
+					
+					// Calculate the offset for another overflow page
+					nextNextPageOffset := nextPageOffset + pageSize
+					
+					// Create a new overflow page
+					newOverflowPage := s.pagePool.Get().([]byte)
+					defer s.pagePool.Put(newOverflowPage)
+					
+					// Clear the new overflow page
+					for i := range newOverflowPage {
+						newOverflowPage[i] = 0
+					}
+					
+					// Create a node for the new overflow page
+					newOverflowNode := &BTreeNode{
+						isLeaf:   true,
+						numKeys:  1,
+						keys:     make([]string, maxKeys),
+						values:   make([][]byte, maxKeys),
+						children: make([]int64, maxKeys+1),
+					}
+					newOverflowNode.keys[0] = key
+					newOverflowNode.values[0] = value
+					
+					// Serialize the new overflow node
+					newOffset := int64(0)
+					binary.BigEndian.PutUint64(newOverflowPage[newOffset:], uint64(newOverflowNode.numKeys))
+					newOffset += 8
+					binary.BigEndian.PutUint64(newOverflowPage[newOffset:], 1) // isLeaf = true
+					newOffset += 8
+					
+					// Write key and value
+					keyLen := len(newOverflowNode.keys[0])
+					binary.BigEndian.PutUint32(newOverflowPage[newOffset:], uint32(keyLen))
+					newOffset += 4
+					copy(newOverflowPage[newOffset:], newOverflowNode.keys[0])
+					newOffset += int64(keyLen)
+					
+					valueLen := len(newOverflowNode.values[0])
+					binary.BigEndian.PutUint32(newOverflowPage[newOffset:], uint32(valueLen))
+					newOffset += 4
+					copy(newOverflowPage[newOffset:], newOverflowNode.values[0])
+					
+					// Write the new overflow page
+					fmt.Printf("DEBUG: Writing additional overflow page at offset %d\n", nextNextPageOffset)
+					if _, err := s.file.WriteAt(newOverflowPage[:pageSize], nextNextPageOffset); err != nil {
+						fmt.Printf("DEBUG: Error writing additional overflow page: %v\n", err)
+						return err
+					}
+					
+					fmt.Printf("DEBUG: Successfully wrote key '%s' to additional overflow page at offset %d\n", 
+						key, nextNextPageOffset)
+						
+					// We've written the key to a new overflow page, no need to update the current page
+					return nil
+				}
+				
+				// Clear the page for writing
+				for i := range nextPage {
+					nextPage[i] = 0
+				}
+				
+				// Serialize the updated node to the page
+				offset := int64(0)
+				binary.BigEndian.PutUint64(nextPage[offset:], uint64(nextNode.numKeys))
+				offset += 8
+				binary.BigEndian.PutUint64(nextPage[offset:], 1) // isLeaf = true
+				offset += 8
+				
+				// Write all keys and values
+				for i := 0; i < nextNode.numKeys; i++ {
+					// Write key
+					keyLen := len(nextNode.keys[i])
+					binary.BigEndian.PutUint32(nextPage[offset:], uint32(keyLen))
+					offset += 4
+					copy(nextPage[offset:], nextNode.keys[i])
+					offset += int64(keyLen)
+					
+					// Write value
+					valueLen := len(nextNode.values[i])
+					binary.BigEndian.PutUint32(nextPage[offset:], uint32(valueLen))
+					offset += 4
+					copy(nextPage[offset:], nextNode.values[i])
+					offset += int64(valueLen)
+				}
+				
+				// Write to the page
+				fmt.Printf("DEBUG: Writing updated overflow page with %d keys at offset %d\n", 
+					nextNode.numKeys, nextPageOffset)
+				if _, err := s.file.WriteAt(nextPage[:pageSize], nextPageOffset); err != nil {
+					fmt.Printf("DEBUG: Error writing updated overflow page: %v\n", err)
+					return err
+				}
+				
+				fmt.Printf("DEBUG: Successfully wrote updated overflow page containing key '%s'\n", key)
+			} else {
+				// Create a new overflow page
+				fmt.Printf("DEBUG: Creating new overflow page for table '%s' at offset %d\n", 
+					tableName, nextPageOffset)
+				
+				// Create a new node for the overflow page
+				newNode := &BTreeNode{
+					isLeaf:   true,
+					numKeys:  1,
+					keys:     make([]string, maxKeys),
+					values:   make([][]byte, maxKeys),
+					children: make([]int64, maxKeys+1),
+				}
+				newNode.keys[0] = key
+				newNode.values[0] = value
+				
+				// Clear the page for writing
+				for i := range nextPage {
+					nextPage[i] = 0
+				}
+				
+				// Serialize the node to the page
+				offset := int64(0)
+				binary.BigEndian.PutUint64(nextPage[offset:], uint64(newNode.numKeys))
+				offset += 8
+				binary.BigEndian.PutUint64(nextPage[offset:], 1) // isLeaf = true
+				offset += 8
+				
+				// Write key and value
+				keyLen := len(newNode.keys[0])
+				binary.BigEndian.PutUint32(nextPage[offset:], uint32(keyLen))
+				offset += 4
+				copy(nextPage[offset:], newNode.keys[0])
+				offset += int64(keyLen)
+				
+				valueLen := len(newNode.values[0])
+				binary.BigEndian.PutUint32(nextPage[offset:], uint32(valueLen))
+				offset += 4
+				copy(nextPage[offset:], newNode.values[0])
+				
+				// Write to the new page
+				fmt.Printf("DEBUG: Writing new overflow page at offset %d\n", nextPageOffset)
+				if _, err := s.file.WriteAt(nextPage[:pageSize], nextPageOffset); err != nil {
+					fmt.Printf("DEBUG: Error writing overflow page: %v\n", err)
+					return err
+				}
+				
+				fmt.Printf("DEBUG: Successfully wrote key '%s' to new overflow page at offset %d\n", 
+					key, nextPageOffset)
+			}
+			
+			// We've written to a different page, so we don't need to update the current page
+			return nil
 		}
 		
 		// Clear the page for writing
@@ -879,70 +1103,100 @@ func (s *BTreeStorage) readRows(tableName string) ([]types.Row, error) {
 	// Create an empty result set
 	var rows []types.Row
 	
-	// Read the data page (page 2)
-	dataOffset := int64(8 + pageSize) // Data is stored in page 2
-	
-	// Read the page
-	page := s.pagePool.Get().([]byte)
-	defer s.pagePool.Put(page)
-	
-	bytesRead, err := s.file.ReadAt(page, dataOffset)
-	if err != nil && err != io.EOF {
-		fmt.Printf("DEBUG: Error reading data page: %v\n", err)
-		return nil, err
+	// Calculate the hash of the table name to find its pages
+	tableHash := 0
+	for _, c := range tableName {
+		tableHash = tableHash*31 + int(c)
 	}
-	fmt.Printf("DEBUG: Read %d bytes from data page at offset %d\n", bytesRead, dataOffset)
+	pageIndex := 1 + (tableHash % 100) // Same hash as in insert method
+	baseOffset := int64(8 + pageSize*pageIndex)
 	
-	// Parse the node header
-	bufOffset := int64(0)
-	numKeys := int(binary.BigEndian.Uint64(page[bufOffset:]))
-	bufOffset += 8
-	isLeaf := binary.BigEndian.Uint64(page[bufOffset:]) == 1
-	bufOffset += 8
+	// We need to read potentially multiple pages for this table
+	// Start with the first page and continue to additional overflow pages
+	currentOffset := baseOffset
+	maxOffset := baseOffset + (pageSize * 100) // Limit to 100 pages per table for safety
 	
-	fmt.Printf("DEBUG: Data node has %d keys, isLeaf=%v\n", numKeys, isLeaf)
-	
-	// Process all keys in the node
-	for i := 0; i < numKeys; i++ {
-		// Read key
-		keyLen := binary.BigEndian.Uint32(page[bufOffset:])
-		bufOffset += 4
-		if keyLen == 0 || bufOffset+int64(keyLen) > pageSize {
-			fmt.Printf("DEBUG: Invalid key length %d at offset %d\n", keyLen, bufOffset)
+	for currentOffset <= maxOffset {
+		// Read the current page
+		page := s.pagePool.Get().([]byte)
+		defer s.pagePool.Put(page)
+		
+		bytesRead, err := s.file.ReadAt(page, currentOffset)
+		if err != nil && err != io.EOF {
+			// Error other than EOF, return it
+			fmt.Printf("DEBUG: Error reading data page at offset %d: %v\n", currentOffset, err)
+			return nil, err
+		}
+		
+		// Check if we reached the end of the file or an empty page
+		if bytesRead == 0 {
+			fmt.Printf("DEBUG: Reached end of file at offset %d\n", currentOffset)
+			break
+		}
+		
+		fmt.Printf("DEBUG: Read %d bytes from data page at offset %d\n", bytesRead, currentOffset)
+		
+		// Parse the node header
+		bufOffset := int64(0)
+		numKeys := int(binary.BigEndian.Uint64(page[bufOffset:]))
+		bufOffset += 8
+		isLeaf := binary.BigEndian.Uint64(page[bufOffset:]) == 1
+		bufOffset += 8
+		
+		fmt.Printf("DEBUG: Data node has %d keys, isLeaf=%v\n", numKeys, isLeaf)
+		
+		// If the page is empty or invalid, skip to the next page
+		if numKeys == 0 {
+			fmt.Printf("DEBUG: Empty page at offset %d, checking next page\n", currentOffset)
+			currentOffset += pageSize
 			continue
 		}
 		
-		key := string(page[bufOffset : bufOffset+int64(keyLen)])
-		bufOffset += int64(keyLen)
-		fmt.Printf("DEBUG: Found key '%s'\n", key)
-		
-		// Check if this key belongs to our target table
-		rowTableName := tableNameFromKey(key)
-		fmt.Printf("DEBUG: Key belongs to table '%s'\n", rowTableName)
-		
-		// Read value
-		valueLen := binary.BigEndian.Uint32(page[bufOffset:])
-		bufOffset += 4
-		if valueLen == 0 || bufOffset+int64(valueLen) > pageSize {
-			fmt.Printf("DEBUG: Invalid value length %d at offset %d\n", valueLen, bufOffset)
-			continue
-		}
-		
-		value := make([]byte, valueLen)
-		copy(value, page[bufOffset:bufOffset+int64(valueLen)])
-		bufOffset += int64(valueLen)
-		
-		// If the row belongs to our table, decode and add it
-		if rowTableName == tableName {
-			row, err := decodeRow(value)
-			if err != nil {
-				fmt.Printf("DEBUG: Error decoding row: %v\n", err)
+		// Process all keys in the node
+		for i := 0; i < numKeys; i++ {
+			// Read key
+			keyLen := binary.BigEndian.Uint32(page[bufOffset:])
+			bufOffset += 4
+			if keyLen == 0 || bufOffset+int64(keyLen) > pageSize {
+				fmt.Printf("DEBUG: Invalid key length %d at offset %d\n", keyLen, bufOffset)
 				continue
 			}
 			
-			fmt.Printf("DEBUG: Adding row: %v\n", row)
-			rows = append(rows, row)
+			key := string(page[bufOffset : bufOffset+int64(keyLen)])
+			bufOffset += int64(keyLen)
+			fmt.Printf("DEBUG: Found key '%s'\n", key)
+			
+			// Check if this key belongs to our target table
+			rowTableName := tableNameFromKey(key)
+			fmt.Printf("DEBUG: Key belongs to table '%s'\n", rowTableName)
+			
+			// Read value
+			valueLen := binary.BigEndian.Uint32(page[bufOffset:])
+			bufOffset += 4
+			if valueLen == 0 || bufOffset+int64(valueLen) > pageSize {
+				fmt.Printf("DEBUG: Invalid value length %d at offset %d\n", valueLen, bufOffset)
+				continue
+			}
+			
+			value := make([]byte, valueLen)
+			copy(value, page[bufOffset:bufOffset+int64(valueLen)])
+			bufOffset += int64(valueLen)
+			
+			// If the row belongs to our table, decode and add it
+			if rowTableName == tableName {
+				row, err := decodeRow(value)
+				if err != nil {
+					fmt.Printf("DEBUG: Error decoding row: %v\n", err)
+					continue
+				}
+				
+				fmt.Printf("DEBUG: Adding row: %v\n", row)
+				rows = append(rows, row)
+			}
 		}
+		
+		// Move to the next page
+		currentOffset += pageSize
 	}
 	
 	fmt.Printf("DEBUG: Found %d rows for table '%s'\n", len(rows), tableName)
@@ -1116,8 +1370,48 @@ func (s *BTreeStorage) matchesWhere(row types.Row, where map[string]interface{})
 
 	for col, val := range where {
 		rowVal, ok := row[col]
-		if !ok || rowVal != val {
+		if !ok {
 			return false
+		}
+		
+		// Handle different types of value comparisons
+		switch v := val.(type) {
+		case string:
+			// String comparison
+			rowStr, isStr := rowVal.(string)
+			if !isStr || rowStr != v {
+				return false
+			}
+		case int:
+			// Integer comparison with various possible types
+			switch rv := rowVal.(type) {
+			case int:
+				if rv != v {
+					return false
+				}
+			case int64:
+				if int(rv) != v {
+					return false
+				}
+			case float64:
+				if int(rv) != v {
+					return false
+				}
+			default:
+				// If the types are incompatible, it's not a match
+				return false
+			}
+		case float64:
+			// Float comparison
+			rowFloat, isFloat := rowVal.(float64)
+			if !isFloat || rowFloat != v {
+				return false
+			}
+		default:
+			// For any other type, use direct equality
+			if rowVal != val {
+				return false
+			}
 		}
 	}
 	return true

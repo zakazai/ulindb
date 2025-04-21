@@ -376,3 +376,115 @@ func TestDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, rows, 0)
 }
+
+func TestMultipleInserts(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "testdb_multiple_inserts")
+	assert.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Test with BTreeStorage to validate the fix for multiple inserts overwriting issue
+	filePath := tmpDir + "/test.btree"
+	s, err := storage.NewBTreeStorage(filePath)
+	assert.NoError(t, err)
+	defer s.Close()
+
+	// Create a test table
+	table := &types.Table{
+		Name: "test_multi",
+		Columns: []types.ColumnDefinition{
+			{Name: "id", Type: "INT", Nullable: false},
+			{Name: "name", Type: "STRING", Nullable: false},
+		},
+	}
+
+	err = s.CreateTable(table)
+	assert.NoError(t, err)
+
+	// Insert multiple rows with the same ID but different names
+	// This previously caused overwrites, but should now preserve all rows
+	err = s.Insert("test_multi", map[string]interface{}{
+		"id":   1,
+		"name": "first",
+	})
+	assert.NoError(t, err)
+
+	err = s.Insert("test_multi", map[string]interface{}{
+		"id":   1,
+		"name": "second",
+	})
+	assert.NoError(t, err)
+
+	err = s.Insert("test_multi", map[string]interface{}{
+		"id":   1,
+		"name": "third",
+	})
+	assert.NoError(t, err)
+
+	// Query all rows - should return all 3 inserted rows
+	rows, err := s.Select("test_multi", []string{"*"}, nil)
+	assert.NoError(t, err)
+	assert.Len(t, rows, 3, "Should have 3 distinct rows despite having the same ID")
+
+	// Verify the contents contain all three rows
+	names := []string{}
+	for _, row := range rows {
+		names = append(names, row["name"].(string))
+	}
+	assert.Contains(t, names, "first")
+	assert.Contains(t, names, "second")
+	assert.Contains(t, names, "third")
+}
+
+func TestCountAggregation(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "testdb_count_aggregation")
+	assert.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Test with BTreeStorage to validate COUNT(*) functionality
+	filePath := tmpDir + "/test.btree"
+	s, err := storage.NewBTreeStorage(filePath)
+	assert.NoError(t, err)
+	defer s.Close()
+
+	// Create a test table
+	table := &types.Table{
+		Name: "test_count",
+		Columns: []types.ColumnDefinition{
+			{Name: "id", Type: "INT", Nullable: false},
+			{Name: "category", Type: "STRING", Nullable: false},
+		},
+	}
+
+	err = s.CreateTable(table)
+	assert.NoError(t, err)
+
+	// Insert multiple rows
+	for i := 1; i <= 5; i++ {
+		category := "A"
+		if i > 3 {
+			category = "B"
+		}
+		
+		err = s.Insert("test_count", map[string]interface{}{
+			"id":       i,
+			"category": category,
+		})
+		assert.NoError(t, err)
+	}
+
+	// Test COUNT(*) with no WHERE clause - should count all rows
+	countRows, err := s.Select("test_count", []string{"COUNT(*)"}, nil)
+	assert.NoError(t, err)
+	assert.Len(t, countRows, 1, "COUNT(*) should return a single row with the count")
+	assert.Equal(t, 5, countRows[0]["count"], "COUNT(*) should return 5 for total row count")
+
+	// Test COUNT(*) with WHERE clause - should count matching rows
+	countWithWhere, err := s.Select("test_count", []string{"COUNT(*)"}, map[string]interface{}{
+		"category": "A",
+	})
+	assert.NoError(t, err)
+	assert.Len(t, countWithWhere, 1)
+	assert.Equal(t, 3, countWithWhere[0]["count"], "COUNT(*) with WHERE should return 3 for category A")
+}
