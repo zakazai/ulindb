@@ -286,7 +286,36 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 		if tok.Type == lexer.ASTERISK {
 			stmt.Columns = []string{"*"}
 		} else if tok.Type == lexer.IDENTIFIER {
-			stmt.Columns = append(stmt.Columns, tok.Literal)
+			// Check for COUNT function
+			if strings.ToUpper(tok.Literal) == "COUNT" {
+				// Must be followed by a left parenthesis
+				leftParen := p.l.NextToken()
+				if leftParen.Type != lexer.LPAREN {
+					return nil, fmt.Errorf("expected ( after COUNT, got %s", leftParen.Literal)
+				}
+				
+				// Get the count column (usually *)
+				countArg := p.l.NextToken()
+				if countArg.Type != lexer.ASTERISK && countArg.Type != lexer.IDENTIFIER {
+					return nil, fmt.Errorf("expected column name or * inside COUNT(), got %s", countArg.Literal)
+				}
+				
+				// Must be followed by a right parenthesis
+				rightParen := p.l.NextToken()
+				if rightParen.Type != lexer.RPAREN {
+					return nil, fmt.Errorf("expected ) after COUNT argument, got %s", rightParen.Literal)
+				}
+				
+				// Add the COUNT function to columns
+				if countArg.Type == lexer.ASTERISK {
+					stmt.Columns = append(stmt.Columns, "COUNT(*)")
+				} else {
+					stmt.Columns = append(stmt.Columns, fmt.Sprintf("COUNT(%s)", countArg.Literal))
+				}
+			} else {
+				// Regular column name
+				stmt.Columns = append(stmt.Columns, tok.Literal)
+			}
 		}
 
 		tok = p.l.NextToken()

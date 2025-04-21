@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zakazai/ulin-db/internal/types"
 )
@@ -183,22 +184,29 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where map[stri
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
+	// Check for COUNT(*) query
+	isCountQuery := false
+	if len(columns) == 1 && strings.HasPrefix(strings.ToUpper(columns[0]), "COUNT(") {
+		fmt.Println("DEBUG: Processing COUNT query")
+		isCountQuery = true
+	}
+
 	// Handle * (select all columns) case
 	allColumns := false
-	if len(columns) == 1 && columns[0] == "*" {
+	if len(columns) == 1 && columns[0] == "*" && !isCountQuery {
 		fmt.Println("DEBUG: Processing * (select all columns)")
 		allColumns = true
 		columns = make([]string, len(table.Columns))
 		for i, col := range table.Columns {
 			columns[i] = col.Name
 		}
-	} else if len(columns) == 0 {
+	} else if len(columns) == 0 && !isCountQuery {
 		// If no columns specified, use all columns from table
 		columns = make([]string, len(table.Columns))
 		for i, col := range table.Columns {
 			columns[i] = col.Name
 		}
-	} else {
+	} else if !isCountQuery {
 		// Validate requested columns exist in table
 		for _, col := range columns {
 			found := false
@@ -218,6 +226,23 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where map[stri
 	allRows, err := s.readRows(tableName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Count matching rows for COUNT(*) query
+	if isCountQuery {
+		var matchingRows int
+		for _, row := range allRows {
+			if where == nil || s.matchesWhere(row, where) {
+				matchingRows++
+			}
+		}
+		
+		// Create a result row with the count
+		countResult := make(types.Row)
+		countResult["count"] = matchingRows
+		
+		fmt.Printf("DEBUG: COUNT(*) query returning count = %d\n", matchingRows)
+		return []types.Row{countResult}, nil
 	}
 
 	// Filter rows based on where clause and select specified columns
@@ -491,8 +516,11 @@ func (s *BTreeStorage) writeTable(table *types.Table) error {
 }
 
 func (s *BTreeStorage) insertRow(tableName string, row types.Row) error {
+	// Generate a unique key with timestamp to avoid overwrites
+	key := fmt.Sprintf("%s:%d:%d", tableName, len(row), time.Now().UnixNano())
+	fmt.Printf("DEBUG: Generated unique row key: %s\n", key)
+	
 	// Convert row to bytes
-	key := fmt.Sprintf("%s:%d", tableName, len(row)) // Simple key format
 	value, err := encodeRow(row)
 	if err != nil {
 		return err
@@ -507,75 +535,191 @@ func (s *BTreeStorage) insert(key string, value []byte) error {
 	
 	// For simplicity, we'll maintain two distinct pages for different types of data:
 	// - Page 1 (offset 8): for table metadata (keys with "__table__" prefix)
-	// - Page 2 (offset 8 + pageSize): for actual data rows
+	// - Page 2+ (offset 8 + pageSize*n): for actual data rows
 	
-	page := s.pagePool.Get().([]byte)
-	defer s.pagePool.Put(page)
+	// Determine whether this is a metadata or data key
+	isMetadata := strings.HasPrefix(key, "__table__")
 	
-	// Clear the page
-	for i := range page {
-		page[i] = 0
-	}
-	
-	// Create a simple node with just our key/value
-	node := &BTreeNode{
-		isLeaf:   true,
-		numKeys:  1,
-		keys:     make([]string, maxKeys),
-		values:   make([][]byte, maxKeys),
-		children: make([]int64, maxKeys+1),
-	}
-	node.keys[0] = key
-	node.values[0] = value
-	
-	// Serialize the node
-	offset := int64(0)
-	binary.BigEndian.PutUint64(page[offset:], uint64(node.numKeys))
-	offset += 8
-	binary.BigEndian.PutUint64(page[offset:], 1) // isLeaf = true
-	offset += 8
-	
-	// Write key and value
-	keyLen := len(node.keys[0])
-	binary.BigEndian.PutUint32(page[offset:], uint32(keyLen))
-	offset += 4
-	copy(page[offset:], node.keys[0])
-	offset += int64(keyLen)
-	
-	valueLen := len(node.values[0])
-	binary.BigEndian.PutUint32(page[offset:], uint32(valueLen))
-	offset += 4
-	copy(page[offset:], node.values[0])
-	
-	// Determine the write offset based on key type
-	var dataOffset int64
-	if strings.HasPrefix(key, "__table__") {
-		// Table metadata goes to page 1
-		dataOffset = 8
+	// If it's a metadata key, write to page 1
+	if isMetadata {
+		page := s.pagePool.Get().([]byte)
+		defer s.pagePool.Put(page)
+		
+		// Clear the page
+		for i := range page {
+			page[i] = 0
+		}
+		
+		// Create a simple node with just our key/value
+		node := &BTreeNode{
+			isLeaf:   true,
+			numKeys:  1,
+			keys:     make([]string, maxKeys),
+			values:   make([][]byte, maxKeys),
+			children: make([]int64, maxKeys+1),
+		}
+		node.keys[0] = key
+		node.values[0] = value
+		
+		// Serialize the node
+		offset := int64(0)
+		binary.BigEndian.PutUint64(page[offset:], uint64(node.numKeys))
+		offset += 8
+		binary.BigEndian.PutUint64(page[offset:], 1) // isLeaf = true
+		offset += 8
+		
+		// Write key and value
+		keyLen := len(node.keys[0])
+		binary.BigEndian.PutUint32(page[offset:], uint32(keyLen))
+		offset += 4
+		copy(page[offset:], node.keys[0])
+		offset += int64(keyLen)
+		
+		valueLen := len(node.values[0])
+		binary.BigEndian.PutUint32(page[offset:], uint32(valueLen))
+		offset += 4
+		copy(page[offset:], node.values[0])
+		
+		// Write to metadata page
+		const metadataOffset = 8
+		fmt.Printf("DEBUG: Writing metadata to offset %d\n", metadataOffset)
+		
+		if _, err := s.file.WriteAt(page[:pageSize], metadataOffset); err != nil {
+			fmt.Printf("DEBUG: Error writing metadata: %v\n", err)
+			return err
+		}
+		
+		// Set the root pointer to page 1 (metadata) so it's found on reload
+		s.file.Seek(0, 0)
+		if err := binary.Write(s.file, binary.BigEndian, int64(metadataOffset)); err != nil {
+			fmt.Printf("DEBUG: Error writing root offset to header: %v\n", err)
+			return err
+		}
+		s.root = metadataOffset
+		
+		fmt.Printf("DEBUG: Wrote metadata key '%s' at offset %d\n", key, metadataOffset)
 	} else {
-		// Data rows go to page 2
-		dataOffset = 8 + pageSize
+		// For data rows, read the current data page to find existing rows
+		dataPage := s.pagePool.Get().([]byte)
+		defer s.pagePool.Put(dataPage)
+		
+		dataOffset := int64(8 + pageSize) // Start of data pages
+		
+		// Get current node info
+		bytesRead, err := s.file.ReadAt(dataPage, dataOffset)
+		if err != nil && err != io.EOF {
+			fmt.Printf("DEBUG: Error reading data page: %v\n", err)
+			return err
+		}
+		
+		var node *BTreeNode
+		var numKeys int
+		
+		// Check if we have an existing data page or need to create a new one
+		if bytesRead > 0 {
+			// Parse existing page
+			bufOffset := int64(0)
+			numKeys = int(binary.BigEndian.Uint64(dataPage[bufOffset:]))
+			
+			// Create node from existing data
+			node = &BTreeNode{
+				isLeaf:   true,
+				numKeys:  numKeys,
+				keys:     make([]string, maxKeys),
+				values:   make([][]byte, maxKeys),
+				children: make([]int64, maxKeys+1),
+			}
+			
+			// Read existing keys/values
+			bufOffset = 16 // Skip the numKeys and isLeaf fields
+			for i := 0; i < numKeys; i++ {
+				// Read key
+				keyLen := binary.BigEndian.Uint32(dataPage[bufOffset:])
+				bufOffset += 4
+				if keyLen > 0 {
+					node.keys[i] = string(dataPage[bufOffset : bufOffset+int64(keyLen)])
+				}
+				bufOffset += int64(keyLen)
+				
+				// Read value
+				valueLen := binary.BigEndian.Uint32(dataPage[bufOffset:])
+				bufOffset += 4
+				if valueLen > 0 {
+					node.values[i] = make([]byte, valueLen)
+					copy(node.values[i], dataPage[bufOffset:bufOffset+int64(valueLen)])
+				}
+				bufOffset += int64(valueLen)
+			}
+			
+			fmt.Printf("DEBUG: Read existing data page with %d keys\n", numKeys)
+		} else {
+			// Create a new node
+			node = &BTreeNode{
+				isLeaf:   true,
+				numKeys:  0,
+				keys:     make([]string, maxKeys),
+				values:   make([][]byte, maxKeys),
+				children: make([]int64, maxKeys+1),
+			}
+			fmt.Printf("DEBUG: Creating new data page\n")
+		}
+		
+		// Add our new key/value to the node
+		if node.numKeys < maxKeys {
+			node.keys[node.numKeys] = key
+			node.values[node.numKeys] = value
+			node.numKeys++
+			fmt.Printf("DEBUG: Added key %s as item %d in data page\n", key, node.numKeys-1)
+		} else {
+			fmt.Printf("DEBUG: Data page is full, dropping oldest entry to make room\n")
+			// Shift all entries left, losing the oldest one
+			for i := 0; i < maxKeys-1; i++ {
+				node.keys[i] = node.keys[i+1]
+				node.values[i] = node.values[i+1]
+			}
+			// Add new entry at the end
+			node.keys[maxKeys-1] = key
+			node.values[maxKeys-1] = value
+		}
+		
+		// Clear the page for writing
+		for i := range dataPage {
+			dataPage[i] = 0
+		}
+		
+		// Serialize the node to the page
+		offset := int64(0)
+		binary.BigEndian.PutUint64(dataPage[offset:], uint64(node.numKeys))
+		offset += 8
+		binary.BigEndian.PutUint64(dataPage[offset:], 1) // isLeaf = true
+		offset += 8
+		
+		// Write all keys and values
+		for i := 0; i < node.numKeys; i++ {
+			// Write key
+			keyLen := len(node.keys[i])
+			binary.BigEndian.PutUint32(dataPage[offset:], uint32(keyLen))
+			offset += 4
+			copy(dataPage[offset:], node.keys[i])
+			offset += int64(keyLen)
+			
+			// Write value
+			valueLen := len(node.values[i])
+			binary.BigEndian.PutUint32(dataPage[offset:], uint32(valueLen))
+			offset += 4
+			copy(dataPage[offset:], node.values[i])
+			offset += int64(valueLen)
+		}
+		
+		// Write the page to disk
+		fmt.Printf("DEBUG: Writing data page with %d keys to offset %d\n", node.numKeys, dataOffset)
+		if _, err := s.file.WriteAt(dataPage[:pageSize], dataOffset); err != nil {
+			fmt.Printf("DEBUG: Error writing data page: %v\n", err)
+			return err
+		}
+		
+		fmt.Printf("DEBUG: Successfully wrote data page containing key '%s'\n", key)
 	}
-	
-	fmt.Printf("DEBUG: Writing node to offset %d based on key type\n", dataOffset)
-	
-	// Write to the determined offset
-	if _, err := s.file.WriteAt(page[:pageSize], dataOffset); err != nil {
-		fmt.Printf("DEBUG: Error writing node: %v\n", err)
-		return err
-	}
-	
-	// Set the root pointer to page 1 (metadata) so it's found on reload
-	const metadataOffset = 8
-	s.file.Seek(0, 0)
-	if err := binary.Write(s.file, binary.BigEndian, int64(metadataOffset)); err != nil {
-		fmt.Printf("DEBUG: Error writing root offset to header: %v\n", err)
-		return err
-	}
-	s.root = metadataOffset
-	
-	fmt.Printf("DEBUG: Wrote node with key '%s' at offset %d\n", key, dataOffset)
-	fmt.Printf("DEBUG: Root offset remains at %d (metadata page)\n", metadataOffset)
 	
 	// Force a sync to ensure data is written to disk
 	if err := s.file.Sync(); err != nil {

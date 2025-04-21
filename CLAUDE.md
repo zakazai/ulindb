@@ -72,7 +72,9 @@ Use appropriate prefixes:
 ## SQL Support
 - Basic CRUD operations: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE
 - Basic WHERE clauses with equality conditions
-- Data types: INT, STRING
+- Data types: INT, STRING, BOOL
+- Aggregation functions:
+  - `COUNT(*)` - Returns the count of rows in a table
 - Utility commands:
   - `SHOW TABLES;` - Lists all tables in the database
   - `SHOW TABLE <table_name>;` - Displays the schema for a specific table
