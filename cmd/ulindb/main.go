@@ -232,6 +232,45 @@ func processCommand(s *storage.HybridStorage, input string) {
 		}
 		return
 	}
+	
+	// Handle SHOW TABLE command to display the schema of a specific table
+	if strings.HasPrefix(strings.ToUpper(input), "SHOW TABLE ") {
+		// Extract the table name
+		parts := strings.Split(strings.TrimSpace(input), " ")
+		if len(parts) < 3 {
+			fmt.Println("Error: Invalid SHOW TABLE command. Usage: SHOW TABLE <table_name>;")
+			return
+		}
+		
+		tableName := strings.TrimSuffix(parts[2], ";")
+		fmt.Printf("Fetching schema for table '%s'...\n", tableName)
+		startTime := time.Now()
+		
+		// Get the table definition
+		table := s.GetTable(tableName)
+		duration := time.Since(startTime)
+		
+		if table == nil {
+			fmt.Printf("Error: Table '%s' does not exist\n", tableName)
+			return
+		}
+		
+		// Print table schema
+		fmt.Printf("Table: %s\n", table.Name)
+		fmt.Println("\nCOLUMN_NAME  | TYPE    | NULLABLE")
+		fmt.Println("-------------+---------+---------")
+		
+		for _, col := range table.Columns {
+			nullable := "YES"
+			if !col.Nullable {
+				nullable = "NO"
+			}
+			fmt.Printf("%-12s | %-7s | %s\n", col.Name, col.Type, nullable)
+		}
+		
+		fmt.Printf("\nSchema retrieved in %v\n", duration)
+		return
+	}
 
 	// Handle EXPLAIN command for query execution plan
 	if strings.HasPrefix(strings.ToUpper(input), "EXPLAIN ") {

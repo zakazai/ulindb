@@ -73,3 +73,8 @@ Use appropriate prefixes:
 - Basic CRUD operations: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE
 - Basic WHERE clauses with equality conditions
 - Data types: INT, STRING
+- Utility commands:
+  - `SHOW TABLES;` - Lists all tables in the database
+  - `SHOW TABLE <table_name>;` - Displays the schema for a specific table
+  - `EXPLAIN <query>;` - Shows the execution plan for a query
+  - `FORCE_SYNC;` - Forces synchronization from BTree to Parquet storage
