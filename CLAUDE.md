@@ -5,14 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commit Message Template
 When committing changes, use the following format:
 ```
-fix: resolve specific issue
+claude: fix: resolve specific issue
 
 Detailed description of what was fixed and how the solution works.
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
+
+Always use `claude: <commit message>` as part of the commit message
 
 Use appropriate prefixes:
 - `feat:` for new features
