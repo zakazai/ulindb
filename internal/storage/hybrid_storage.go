@@ -64,15 +64,32 @@ func IsOLAPQuery(columns []string, where map[string]interface{}) bool {
 
 // CreateTable implements Storage.CreateTable by delegating to both backends
 func (s *HybridStorage) CreateTable(table *types.Table) error {
+	// Debug
+	fmt.Printf("DEBUG: HybridStorage.CreateTable called for table '%s'\n", table.Name)
+	fmt.Printf("DEBUG: Table schema: %v\n", table.Columns)
+	
 	// Always create in OLTP first
 	if err := s.oltp.CreateTable(table); err != nil {
+		fmt.Printf("DEBUG: OLTP CreateTable failed: %v\n", err)
 		return err
+	}
+	
+	fmt.Printf("DEBUG: OLTP CreateTable succeeded for table '%s'\n", table.Name)
+	
+	// Show tables after OLTP creation
+	tables, err := s.oltp.ShowTables()
+	if err != nil {
+		fmt.Printf("DEBUG: Failed to list OLTP tables: %v\n", err)
+	} else {
+		fmt.Printf("DEBUG: OLTP tables after creation: %v\n", tables)
 	}
 
 	// Then propagate to OLAP
 	if err := s.olap.CreateTable(table); err != nil {
 		// This is not critical, so just log and continue
 		fmt.Printf("Warning: Failed to create table in OLAP storage: %v\n", err)
+	} else {
+		fmt.Printf("DEBUG: OLAP CreateTable succeeded for table '%s'\n", table.Name)
 	}
 
 	return nil
@@ -86,9 +103,17 @@ func (s *HybridStorage) Insert(tableName string, values map[string]interface{}) 
 
 // Select implements Storage.Select with intelligent routing
 func (s *HybridStorage) Select(tableName string, columns []string, where map[string]interface{}) ([]types.Row, error) {
-	// Route query based on its characteristics
+	// First try OLTP storage to ensure we always see the most recent data
+	oltpRows, oltpErr := s.oltp.Select(tableName, columns, where)
+	
+	// If OLTP succeeds, use its results
+	if oltpErr == nil && len(oltpRows) > 0 {
+		return oltpRows, nil
+	}
+	
+	// If query is OLAP type and OLTP couldn't find data, try OLAP storage
 	if IsOLAPQuery(columns, where) {
-		// Try OLAP storage first
+		// Try OLAP storage 
 		rows, err := s.olap.Select(tableName, columns, where)
 
 		// If successful or error is not just "not found", return results
@@ -96,12 +121,12 @@ func (s *HybridStorage) Select(tableName string, columns []string, where map[str
 			return rows, err
 		}
 
-		// Fall back to OLTP if OLAP fails
-		fmt.Printf("OLAP query failed, falling back to OLTP: %v\n", err)
+		// Fall back to OLTP error if OLAP also fails
+		fmt.Printf("OLAP query failed: %v\n", err)
 	}
 
-	// Use OLTP storage
-	return s.oltp.Select(tableName, columns, where)
+	// Return OLTP results, which could be an error or empty result
+	return oltpRows, oltpErr
 }
 
 // Update implements Storage.Update by delegating to OLTP

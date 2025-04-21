@@ -14,6 +14,7 @@ import (
 	"github.com/zakazai/ulin-db/internal/lexer"
 	"github.com/zakazai/ulin-db/internal/parser"
 	"github.com/zakazai/ulin-db/internal/storage"
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 func main() {
@@ -28,12 +29,21 @@ func main() {
 		SyncInterval: time.Minute * 5, // Sync every 5 minutes
 	}
 
+	// Make sure the data directories exist
+	os.MkdirAll("data", 0755)
+	os.MkdirAll("data/parquet", 0755)
+
 	// Create hybrid storage
 	hybridStorage, err := storage.CreateHybridStorage(config)
 	if err != nil {
 		fmt.Printf("Error initializing hybrid storage: %v\n", err)
 		return
 	}
+
+	// Debug storage status
+	fmt.Println("Hybrid storage initialized successfully")
+	fmt.Println("OLTP storage type:", fmt.Sprintf("%T", hybridStorage.GetOLTPStorage()))
+	fmt.Println("OLAP storage type:", fmt.Sprintf("%T", hybridStorage.GetOLAPStorage()))
 
 	// Force initial sync to ensure data is available in Parquet
 	err = hybridStorage.SyncNow()
@@ -272,12 +282,30 @@ func processCommand(s *storage.HybridStorage, input string) {
 
 	// Special handling for INSERT statements
 	if insertStmt, ok := stmt.(*parser.InsertStatement); ok {
+		// Debug
+		fmt.Println("DEBUG: Executing INSERT Statement")
+		fmt.Printf("DEBUG: Table name = %s\n", insertStmt.Table)
+		fmt.Printf("DEBUG: Raw values = %v\n", insertStmt.Values)
+		
+		// Show all available tables
+		tables, _ := s.ShowTables()
+		fmt.Printf("DEBUG: Available tables = %v\n", tables)
+		
 		// Get the table definition to map column names
 		table := s.GetTable(insertStmt.Table)
 		if table == nil {
 			fmt.Printf("Error executing statement: table %s does not exist\n", insertStmt.Table)
+			// Try direct OLTP query to see if table exists there
+			oltpTable := s.GetOLTPStorage().GetTable(insertStmt.Table)
+			if oltpTable != nil {
+				fmt.Printf("DEBUG: Table found in OLTP but not in hybrid - schema: %v\n", oltpTable.Columns)
+			} else {
+				fmt.Println("DEBUG: Table not found in OLTP storage either")
+			}
 			return
 		}
+		
+		fmt.Printf("DEBUG: Table columns = %v\n", table.Columns)
 
 		// Map values to column names based on their position
 		values := make(map[string]interface{})
@@ -289,6 +317,7 @@ func processCommand(s *storage.HybridStorage, input string) {
 			if val, ok := insertStmt.Values[columnKey]; ok && i-1 < len(table.Columns) {
 				colName := table.Columns[i-1].Name
 				values[colName] = val
+				fmt.Printf("DEBUG: Mapping %s -> %s = %v\n", columnKey, colName, val)
 			}
 		}
 
@@ -309,22 +338,119 @@ func processCommand(s *storage.HybridStorage, input string) {
 	// Execute other statement types with timing
 	fmt.Printf("Executing statement...\n")
 	startTime := time.Now()
-
-	// For SELECT statements, determine if OLAP or OLTP
+	
+	// For SELECT statements, handle specially
 	if selectStmt, ok := stmt.(*parser.SelectStatement); ok {
 		isOLAP := storage.IsOLAPQuery(selectStmt.Columns, selectStmt.Where)
 		storageType := "BTree (OLTP)"
 		if isOLAP {
 			storageType = "Parquet (OLAP)"
 		}
+		
+		// First always try OLTP storage directly for freshest data
+		fmt.Println("Always trying OLTP storage first for most up-to-date data...")
+		oltpRows, oltpErr := s.GetOLTPStorage().Select(selectStmt.Table, selectStmt.Columns, selectStmt.Where)
+		
+		if oltpErr == nil && len(oltpRows) > 0 {
+			// Found data in OLTP, display it
+			mapRows := make([]map[string]interface{}, len(oltpRows))
+			for i, row := range oltpRows {
+				mapRows[i] = row
+			}
+			fmt.Printf("Retrieved %d rows from OLTP storage\n", len(mapRows))
+			printFormattedResults(mapRows)
+			duration := time.Since(startTime)
+			fmt.Printf("Execution completed in %v\n", duration)
+			return
+		}
+		
+		// If OLTP storage returned no rows, continue with regular query
+		if oltpErr != nil {
+			fmt.Printf("OLTP storage error: %v\n", oltpErr)
+		} else {
+			fmt.Println("OLTP storage returned no rows, trying hybrid...")
+		}
+		
 		fmt.Printf("Query classified as %s, using %s storage\n",
 			map[bool]string{true: "analytical", false: "transactional"}[isOLAP],
 			storageType)
+		
+		// Execute the SELECT statement
+		result, err := stmt.(parser.Statement).Execute(s)
+		duration := time.Since(startTime)
+		
+		if err != nil {
+			fmt.Printf("Error executing statement: %v\n", err)
+			return
+		}
+		
+		// For SELECT statements, also try to retrieve table directly to display rows
+		table := s.GetTable(selectStmt.Table)
+		rowsEmpty := true
+		
+		// Check if result set is empty
+		if result != nil {
+			if rows, ok := result.([]map[string]interface{}); ok {
+				rowsEmpty = len(rows) == 0
+			} else if typedRows, ok := result.([]types.Row); ok {
+				rowsEmpty = len(typedRows) == 0
+				if !rowsEmpty {
+					// Convert typed rows to interface rows
+					mapRows := make([]map[string]interface{}, len(typedRows))
+					for i, row := range typedRows {
+						mapRows[i] = row
+					}
+					result = mapRows
+				}
+			}
+		}
+		
+		// Print the result with timing information
+		fmt.Printf("Execution completed in %v\n", duration)
+		
+		// Display results or table schema
+		if rowsEmpty && table != nil {
+			// Try direct OLTP query to see what's there (diagnostic measure)
+			fmt.Println("Trying direct OLTP query as a diagnostic...")
+			oltpRows, _ := s.GetOLTPStorage().Select(selectStmt.Table, selectStmt.Columns, selectStmt.Where)
+			if len(oltpRows) > 0 {
+				// Found data in OLTP, display it
+				mapRows := make([]map[string]interface{}, len(oltpRows))
+				for i, row := range oltpRows {
+					mapRows[i] = row
+				}
+				fmt.Printf("Retrieved %d rows directly from OLTP storage\n", len(mapRows))
+				printFormattedResults(mapRows)
+				return
+			} else {
+				fmt.Println("Direct OLTP query also returned no rows.")
+			}
+			
+			// If SELECT returned no results but table exists, provide some info about the table
+			fmt.Printf("Table '%s' exists but has no rows or no rows match your query.\n", selectStmt.Table)
+			fmt.Println("Table schema:")
+			for _, col := range table.Columns {
+				fmt.Printf("  %s (%s)\n", col.Name, col.Type)
+			}
+		} else if !rowsEmpty {
+			// Display rows if we have them
+			if rows, ok := result.([]map[string]interface{}); ok {
+				fmt.Printf("Retrieved %d rows\n", len(rows))
+				printFormattedResults(rows)
+			} else {
+				fmt.Println(result)
+			}
+		} else {
+			fmt.Println("Empty result set")
+		}
+		
+		return
 	}
-
+	
+	// For non-SELECT statements
 	result, err := stmt.(parser.Statement).Execute(s)
 	duration := time.Since(startTime)
-
+	
 	if err != nil {
 		fmt.Printf("Error executing statement: %v\n", err)
 		return
@@ -333,10 +459,17 @@ func processCommand(s *storage.HybridStorage, input string) {
 	// Print the result with timing information
 	fmt.Printf("Execution completed in %v\n", duration)
 	if result != nil {
-		// Check if result is a []types.Row from SELECT
 		if rows, ok := result.([]map[string]interface{}); ok {
 			fmt.Printf("Retrieved %d rows\n", len(rows))
 			printFormattedResults(rows)
+		} else if typedRows, ok := result.([]types.Row); ok {
+			fmt.Printf("Retrieved %d rows\n", len(typedRows))
+			// Convert typed rows to interface rows
+			mapRows := make([]map[string]interface{}, len(typedRows))
+			for i, row := range typedRows {
+				mapRows[i] = row
+			}
+			printFormattedResults(mapRows)
 		} else {
 			fmt.Println(result)
 		}
