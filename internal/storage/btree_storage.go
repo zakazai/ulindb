@@ -49,7 +49,7 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 	}
 
 	// Open file with direct I/O mode if possible for better performance
-	fmt.Printf("DEBUG: Opening BTree file at %s\n", filePath)
+	types.GlobalLogger.Debug("Opening BTree file at %s", filePath)
 	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open BTree file: %v", err)
@@ -71,9 +71,9 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 		return nil, fmt.Errorf("failed to stat file: %v", err)
 	}
 
-	fmt.Printf("DEBUG: BTree file size: %d bytes\n", info.Size())
+	types.GlobalLogger.Debug("BTree file size: %d bytes", info.Size())
 	if info.Size() == 0 {
-		fmt.Println("DEBUG: Creating new BTree file with empty root")
+		types.GlobalLogger.Debug("Creating new BTree file with empty root")
 		
 		// Initialize the file with a root offset of 0 (no data yet)
 		storage.root = 0
@@ -84,31 +84,31 @@ func NewBTreeStorage(filePath string) (*BTreeStorage, error) {
 		
 		// Sync the file to ensure changes are written
 		if err := file.Sync(); err != nil {
-			fmt.Printf("DEBUG: Error syncing file: %v\n", err)
+			types.GlobalLogger.Debug("Error syncing file: %v", err)
 		}
 		
-		fmt.Printf("DEBUG: Initialized empty BTree file with root offset 0\n")
+		types.GlobalLogger.Debug("Initialized empty BTree file with root offset 0")
 	} else {
 		// Read root offset from file header
-		fmt.Println("DEBUG: Reading root offset from existing file")
+		types.GlobalLogger.Debug("Reading root offset from existing file")
 		file.Seek(0, 0)
 		var rootOffset int64
 		if err := binary.Read(file, binary.BigEndian, &rootOffset); err != nil {
 			return nil, fmt.Errorf("failed to read root offset from header: %v", err)
 		}
 		storage.root = rootOffset
-		fmt.Printf("DEBUG: Read root offset: %d\n", rootOffset)
+		types.GlobalLogger.Debug("Read root offset: %d", rootOffset)
 		
 		// Load table metadata from the B-tree
-		fmt.Println("DEBUG: Loading tables from BTree")
+		types.GlobalLogger.Debug("Loading tables from BTree")
 		if err := storage.loadTables(); err != nil {
-			fmt.Printf("Warning: Error loading tables: %v\n", err)
+			types.GlobalLogger.Warning("Error loading tables: %v", err)
 			// Continue anyway, as this might be a new file
 		}
 		
-		fmt.Printf("DEBUG: Loaded %d tables from BTree\n", len(storage.tables))
+		types.GlobalLogger.Debug("Loaded %d tables from BTree", len(storage.tables))
 		for tableName := range storage.tables {
-			fmt.Printf("DEBUG: Found table: %s\n", tableName)
+			types.GlobalLogger.Debug("Found table: %s", tableName)
 		}
 	}
 
@@ -119,7 +119,7 @@ func (s *BTreeStorage) CreateTable(table *types.Table) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	fmt.Printf("DEBUG: BTreeStorage.CreateTable called for table '%s'\n", table.Name)
+	types.GlobalLogger.Debug("BTreeStorage.CreateTable called for table '%s'", table.Name)
 	
 	// Initialize the tables map if it's nil
 	if s.tables == nil {
@@ -127,24 +127,24 @@ func (s *BTreeStorage) CreateTable(table *types.Table) error {
 	}
 
 	if _, exists := s.tables[table.Name]; exists {
-		fmt.Printf("DEBUG: Table '%s' already exists in memory\n", table.Name)
+		types.GlobalLogger.Debug("Table '%s' already exists in memory", table.Name)
 		return fmt.Errorf("table %s already exists", table.Name)
 	}
 
 	// Store table in memory first
 	s.tables[table.Name] = table
-	fmt.Printf("DEBUG: Table '%s' added to in-memory tables map\n", table.Name)
+	types.GlobalLogger.Debug("Table '%s' added to in-memory tables map", table.Name)
 	
 	// Then persist to disk
 	err := s.writeTable(table)
 	if err != nil {
 		// Remove from memory if write failed
 		delete(s.tables, table.Name)
-		fmt.Printf("DEBUG: Failed to write table '%s' to disk: %v\n", table.Name, err)
+		types.GlobalLogger.Debug("Failed to write table '%s' to disk: %v", table.Name, err)
 		return err
 	}
 	
-	fmt.Printf("DEBUG: Successfully created table '%s' in BTree storage\n", table.Name)
+	types.GlobalLogger.Debug("Successfully created table '%s' in BTree storage", table.Name)
 	return nil
 }
 
@@ -177,7 +177,7 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where map[stri
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	fmt.Printf("DEBUG: BTreeStorage.Select called for table '%s', columns %v\n", tableName, columns)
+	types.GlobalLogger.Debug("BTreeStorage.Select called for table '%s', columns %v", tableName, columns)
 
 	table, exists := s.tables[tableName]
 	if !exists {
@@ -187,14 +187,14 @@ func (s *BTreeStorage) Select(tableName string, columns []string, where map[stri
 	// Check for COUNT(*) query
 	isCountQuery := false
 	if len(columns) == 1 && strings.HasPrefix(strings.ToUpper(columns[0]), "COUNT(") {
-		fmt.Println("DEBUG: Processing COUNT query")
+		types.GlobalLogger.Debug("Processing COUNT query")
 		isCountQuery = true
 	}
 
 	// Handle * (select all columns) case
 	allColumns := false
 	if len(columns) == 1 && columns[0] == "*" && !isCountQuery {
-		fmt.Println("DEBUG: Processing * (select all columns)")
+		types.GlobalLogger.Debug("Processing * (select all columns)")
 		allColumns = true
 		columns = make([]string, len(table.Columns))
 		for i, col := range table.Columns {

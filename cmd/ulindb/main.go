@@ -18,8 +18,26 @@ import (
 )
 
 func main() {
+	// Print the welcome message
 	fmt.Println("UlinDB SQL Server")
 	fmt.Println("Type 'exit' to quit")
+
+	// Determine log level from environment variable or command line args
+	logLevel := types.LogLevelInfo
+	if logLevelStr := os.Getenv("ULINDB_LOG_LEVEL"); logLevelStr != "" {
+		switch strings.ToLower(logLevelStr) {
+		case "debug":
+			logLevel = types.LogLevelDebug
+		case "info":
+			logLevel = types.LogLevelInfo
+		case "warning":
+			logLevel = types.LogLevelWarning
+		case "error":
+			logLevel = types.LogLevelError
+		case "none":
+			logLevel = types.LogLevelNone
+		}
+	}
 
 	// Initialize hybrid storage with BTree for OLTP and Parquet for OLAP
 	config := storage.StorageConfig{
@@ -27,6 +45,7 @@ func main() {
 		FilePath:     "data/ulindb.btree",
 		DataDir:      "data/parquet",
 		SyncInterval: time.Minute * 5, // Sync every 5 minutes
+		LogLevel:     logLevel,
 	}
 
 	// Make sure the data directories exist
@@ -36,11 +55,16 @@ func main() {
 	// Create hybrid storage
 	hybridStorage, err := storage.CreateHybridStorage(config)
 	if err != nil {
-		fmt.Printf("Error initializing hybrid storage: %v\n", err)
+		types.GlobalLogger.Error("Error initializing hybrid storage: %v", err)
 		return
 	}
 
-	// Debug storage status
+	// Log storage status
+	types.GlobalLogger.Info("Hybrid storage initialized successfully")
+	types.GlobalLogger.Info("OLTP storage type: %T", hybridStorage.GetOLTPStorage())
+	types.GlobalLogger.Info("OLAP storage type: %T", hybridStorage.GetOLAPStorage())
+	
+	// User-facing info (always display)
 	fmt.Println("Hybrid storage initialized successfully")
 	fmt.Println("OLTP storage type:", fmt.Sprintf("%T", hybridStorage.GetOLTPStorage()))
 	fmt.Println("OLAP storage type:", fmt.Sprintf("%T", hybridStorage.GetOLAPStorage()))
@@ -48,6 +72,7 @@ func main() {
 	// Force initial sync to ensure data is available in Parquet
 	err = hybridStorage.SyncNow()
 	if err != nil {
+		types.GlobalLogger.Warning("Initial sync failed: %v", err)
 		fmt.Printf("Warning: Initial sync failed: %v\n", err)
 		// Continue anyway as this is not critical
 	}

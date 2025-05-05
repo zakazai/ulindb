@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"time"
+	
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
 // StorageType represents different storage backends supported by the database.
@@ -42,12 +44,18 @@ type StorageConfig struct {
 
 	// SyncInterval controls how frequently Parquet syncs from BTree.
 	SyncInterval time.Duration
+	
+	// LogLevel controls the verbosity of logging.
+	LogLevel types.LogLevel
 }
 
 // NewStorage creates a new storage instance based on the provided configuration.
 // It will instantiate the appropriate storage implementation based on the config.Type
 // and initialize it with the relevant parameters from the config.
 func NewStorage(config StorageConfig) (Storage, error) {
+	// Set the global log level from config
+	types.GlobalLogger.SetLevel(config.LogLevel)
+	
 	switch config.Type {
 	case InMemoryStorageType:
 		return NewInMemoryStorage(), nil
@@ -103,6 +111,9 @@ func NewStorage(config StorageConfig) (Storage, error) {
 // storage engine based on the query patterns. It also sets up background synchronization to
 // keep the OLAP storage updated with data from the OLTP storage.
 func CreateHybridStorage(config StorageConfig) (*HybridStorage, error) {
+	// Set the global log level from config
+	types.GlobalLogger.SetLevel(config.LogLevel)
+	
 	if config.Type != BTreeStorageType {
 		return nil, fmt.Errorf("hybrid storage requires BTree as the primary storage type")
 	}
