@@ -3,6 +3,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/zakazai/ulin-db/internal/parser"
 	"github.com/zakazai/ulin-db/internal/types"
@@ -49,44 +50,63 @@ func (p *Plan) Execute() (interface{}, error) {
 	case "DELETE":
 		return nil, p.Storage.Delete(p.Table, p.Where)
 	case "CREATE":
-		// TODO: Implement create table plan
-		return nil, fmt.Errorf("create table not implemented in planner")
+		// Parse column definitions from plan.Columns
+		columnDefs := make([]types.ColumnDefinition, 0, len(p.Columns))
+		for _, colStr := range p.Columns {
+			parts := strings.Fields(colStr)
+			if len(parts) < 2 {
+				return nil, fmt.Errorf("invalid column definition: %s", colStr)
+			}
+			columnDefs = append(columnDefs, types.ColumnDefinition{
+				Name:     parts[0],
+				Type:     parts[1],
+				Nullable: true, // Default to nullable
+			})
+		}
+		return nil, p.Storage.CreateTable(&types.Table{
+			Name:    p.Table,
+			Columns: columnDefs,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", p.Type)
 	}
 }
 
 // ExecuteStatement executes a SQL statement
-func ExecuteStatement(stmt parser.Statement, storage types.Storage) (interface{}, error) {
+func ExecuteStatement(stmt *parser.Statement, storage types.Storage) (interface{}, error) {
 	return stmt.Execute(storage)
 }
 
 // CreatePlan converts a Statement into an execution Plan
-func CreatePlan(stmt parser.Statement, storage types.Storage) (*Plan, error) {
+func CreatePlan(stmt *parser.Statement, storage types.Storage) (*Plan, error) {
 	plan := &Plan{
 		Storage: storage,
 	}
 
-	switch s := stmt.(type) {
-	case *parser.SelectStatement:
+	if stmt.SelectStatement != nil {
+		s := stmt.SelectStatement
 		plan.Type = "SELECT"
 		plan.Table = s.Table
 		plan.Columns = s.Columns
 		plan.Where = s.Where
-	case *parser.InsertStatement:
+	} else if stmt.InsertStatement != nil {
+		s := stmt.InsertStatement
 		plan.Type = "INSERT"
 		plan.Table = s.Table
 		plan.Values = s.Values
-	case *parser.UpdateStatement:
+	} else if stmt.UpdateStatement != nil {
+		s := stmt.UpdateStatement
 		plan.Type = "UPDATE"
 		plan.Table = s.Table
 		plan.Set = s.Set
 		plan.Where = s.Where
-	case *parser.DeleteStatement:
+	} else if stmt.DeleteStatement != nil {
+		s := stmt.DeleteStatement
 		plan.Type = "DELETE"
 		plan.Table = s.Table
 		plan.Where = s.Where
-	case *parser.CreateStatement:
+	} else if stmt.CreateStatement != nil {
+		s := stmt.CreateStatement
 		plan.Type = "CREATE"
 		plan.Table = s.Table
 		// Convert columns to string format
@@ -94,13 +114,13 @@ func CreatePlan(stmt parser.Statement, storage types.Storage) (*Plan, error) {
 		for i, col := range s.Columns {
 			plan.Columns[i] = fmt.Sprintf("%s %s", col.Name, col.Type)
 		}
-	default:
+	} else {
 		return nil, errors.New("invalid statement type")
 	}
 
 	return plan, nil
 }
 
-func (p *Planner) Execute(stmt parser.Statement) (interface{}, error) {
+func (p *Planner) Execute(stmt *parser.Statement) (interface{}, error) {
 	return stmt.Execute(p.storage)
 }
