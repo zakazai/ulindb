@@ -7,48 +7,72 @@ import (
 	"github.com/zakazai/ulin-db/internal/lexer"
 )
 
-func TestParseSelect(t *testing.T) {
+func TestParse(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		expected *SelectStatement
+		name    string
+		input   string
+		want    *Statement
+		wantErr bool
 	}{
 		{
-			name:  "Select_all_from_table",
-			input: "SELECT * FROM users",
-			expected: &SelectStatement{
-				Columns: []string{"*"},
-				Table:   "users",
-			},
-		},
-		{
-			name:  "Select_specific_columns",
-			input: "SELECT id, name FROM users",
-			expected: &SelectStatement{
-				Columns: []string{"id", "name"},
-				Table:   "users",
-			},
-		},
-		{
-			name:  "Select_with_where_clause",
-			input: "SELECT * FROM users WHERE id = 1",
-			expected: &SelectStatement{
-				Columns: []string{"*"},
-				Table:   "users",
-				Where: map[string]interface{}{
-					"id": float64(1),
+			name:  "Select all from table",
+			input: "SELECT * FROM tablex",
+			want: &Statement{
+				Type: "SELECT",
+				SelectStatement: &SelectStatement{
+					Table:   "tablex",
+					Columns: []string{"*"},
 				},
 			},
+		},
+		{
+			name:  "Select with where clause",
+			input: "SELECT a FROM tablex WHERE a = 1",
+			want: &Statement{
+				Type: "SELECT",
+				SelectStatement: &SelectStatement{
+					Table:   "tablex",
+					Columns: []string{"a"},
+					Where: map[string]interface{}{
+						"a": float64(1),
+					},
+				},
+			},
+		},
+		{
+			name:  "Create table",
+			input: "CREATE TABLE tablex (id INT, name TEXT)",
+			want: &Statement{
+				Type: "CREATE",
+				CreateStatement: &CreateStatement{
+					Table: "tablex",
+					Columns: []struct {
+						Name     string
+						Type     string
+						Nullable bool
+					}{
+						{Name: "id", Type: "INT", Nullable: true},
+						{Name: "name", Type: "TEXT", Nullable: true},
+					},
+				},
+			},
+		},
+		{
+			name:    "Invalid SQL",
+			input:   "INVALID SQL",
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l := lexer.New(tt.input)
-			p := New(l)
-			stmt, err := p.Parse()
+			got, err := Parse(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.expected, stmt)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -76,7 +100,7 @@ func TestParseInsert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			p := New(l)
-			stmt, err := p.Parse()
+			stmt, err := p.parseInsert()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, stmt)
 		})
@@ -108,7 +132,7 @@ func TestParseUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			p := New(l)
-			stmt, err := p.Parse()
+			stmt, err := p.parseUpdate()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, stmt)
 		})
@@ -137,7 +161,7 @@ func TestParseDelete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			p := New(l)
-			stmt, err := p.Parse()
+			stmt, err := p.parseDelete()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, stmt)
 		})
@@ -171,9 +195,41 @@ func TestParseCreate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l := lexer.New(tt.input)
 			p := New(l)
-			stmt, err := p.Parse()
+			stmt, err := p.parseCreate()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, stmt)
+		})
+	}
+}
+
+func TestParserErrors(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		expectedError string
+	}{
+		{
+			name:          "Missing_table_name",
+			input:         "CREATE TABLE",
+			expectedError: "expected table name",
+		},
+		{
+			name:          "Invalid_column_definition",
+			input:         "CREATE TABLE users (id)",
+			expectedError: "expected column type",
+		},
+		{
+			name:          "Missing_values",
+			input:         "INSERT INTO users",
+			expectedError: "expected VALUES",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.input)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
 }

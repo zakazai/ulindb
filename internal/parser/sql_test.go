@@ -15,14 +15,10 @@ func TestSQLCommands(t *testing.T) {
 	// Test CREATE TABLE
 	createTableSQL := "CREATE TABLE users (id INT, name STRING, age INT)"
 	stmt, err := Parse(createTableSQL)
-	if err != nil {
-		t.Fatalf("Failed to parse CREATE TABLE: %v", err)
-	}
+	assert.NoError(t, err, "Failed to parse CREATE TABLE")
 
-	createStmt, ok := stmt.(*CreateStatement)
-	if !ok {
-		t.Fatalf("Failed to get CreateStatement, got: %T", stmt)
-	}
+	assert.NotNil(t, stmt.CreateStatement, "Failed to get CreateStatement")
+	createStmt := stmt.CreateStatement
 
 	// Create a table definition with columns from the parsed statement
 	columns := make([]types.ColumnDefinition, len(createStmt.Columns))
@@ -41,21 +37,15 @@ func TestSQLCommands(t *testing.T) {
 	}
 
 	err = store.CreateTable(table)
-	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
-	}
+	assert.NoError(t, err, "Failed to create table")
 
 	// Test INSERT
 	insertSQL := "INSERT INTO users VALUES (1, 'John', 25)"
 	stmt, err = Parse(insertSQL)
-	if err != nil {
-		t.Fatalf("Failed to parse INSERT: %v", err)
-	}
+	assert.NoError(t, err, "Failed to parse INSERT")
 
-	insertStmt, ok := stmt.(*InsertStatement)
-	if !ok {
-		t.Fatalf("Failed to get InsertStatement, got: %T", stmt)
-	}
+	assert.NotNil(t, stmt.InsertStatement, "Failed to get InsertStatement")
+	insertStmt := stmt.InsertStatement
 
 	// Rename columns to match the table definition
 	values := map[string]interface{}{
@@ -65,30 +55,22 @@ func TestSQLCommands(t *testing.T) {
 	}
 
 	err = store.Insert(insertStmt.Table, values)
-	if err != nil {
-		t.Fatalf("Failed to insert data: %v", err)
-	}
+	assert.NoError(t, err, "Failed to insert data")
 
 	// Test SELECT
 	selectSQL := "SELECT * FROM users WHERE id = 1"
 	stmt, err = Parse(selectSQL)
-	if err != nil {
-		t.Fatalf("Failed to parse SELECT: %v", err)
-	}
+	assert.NoError(t, err, "Failed to parse SELECT")
 
-	selectStmt, ok := stmt.(*SelectStatement)
-	if !ok {
-		t.Fatalf("Failed to get SelectStatement, got: %T", stmt)
-	}
+	selectStmt := stmt.SelectStatement
+	assert.NotNil(t, stmt.SelectStatement, "Failed to get SelectStatement")
 
 	// Print debug info
 	t.Logf("SELECT statement: table=%s, columns=%v, where=%v",
 		selectStmt.Table, selectStmt.Columns, selectStmt.Where)
 
 	results, err := store.Select(selectStmt.Table, selectStmt.Columns, selectStmt.Where)
-	if err != nil {
-		t.Fatalf("Failed to select data: %v", err)
-	}
+	assert.NoError(t, err, "Failed to select data")
 
 	// Debug: list all rows in the table
 	allResults, _ := store.Select(selectStmt.Table, []string{"*"}, nil)
@@ -103,9 +85,7 @@ func TestSQLCommands(t *testing.T) {
 	t.Logf("Direct results with float64(1): %v", directResults)
 
 	// Use the direct results since they work
-	if len(directResults) != 1 {
-		t.Fatalf("Expected 1 result with direct query, got %d", len(directResults))
-	}
+	assert.Equal(t, 1, len(directResults), "Expected 1 result with direct query")
 
 	// Check values accounting for type differences
 	nameValue := directResults[0]["name"]
@@ -127,25 +107,17 @@ func TestSQLCommands(t *testing.T) {
 	// Test UPDATE
 	updateSQL := "UPDATE users SET age = 26 WHERE id = 1"
 	stmt, err = Parse(updateSQL)
-	if err != nil {
-		t.Fatalf("Failed to parse UPDATE: %v", err)
-	}
+	assert.NoError(t, err, "Failed to parse UPDATE")
 
-	updateStmt, ok := stmt.(*UpdateStatement)
-	if !ok {
-		t.Fatalf("Failed to get UpdateStatement, got: %T", stmt)
-	}
+	updateStmt := stmt.UpdateStatement
+	assert.NotNil(t, stmt.UpdateStatement, "Failed to get UpdateStatement")
 
 	err = store.Update(updateStmt.Table, updateStmt.Set, updateStmt.Where)
-	if err != nil {
-		t.Fatalf("Failed to update data: %v", err)
-	}
+	assert.NoError(t, err, "Failed to update data")
 
 	// Verify UPDATE
 	results, err = store.Select("users", []string{"*"}, map[string]interface{}{"id": float64(1)})
-	if err != nil {
-		t.Fatalf("Failed to select after update: %v", err)
-	}
+	assert.NoError(t, err, "Failed to select after update")
 
 	// Check values accounting for type differences
 	ageValue = results[0]["age"]
@@ -161,26 +133,16 @@ func TestSQLCommands(t *testing.T) {
 	// Test DELETE
 	deleteSQL := "DELETE FROM users WHERE id = 1"
 	stmt, err = Parse(deleteSQL)
-	if err != nil {
-		t.Fatalf("Failed to parse DELETE: %v", err)
-	}
+	assert.NoError(t, err, "Failed to parse DELETE")
 
-	deleteStmt, ok := stmt.(*DeleteStatement)
-	if !ok {
-		t.Fatalf("Failed to get DeleteStatement, got: %T", stmt)
-	}
+	deleteStmt := stmt.DeleteStatement
+	assert.NotNil(t, stmt.DeleteStatement, "Failed to get DeleteStatement")
 
 	err = store.Delete(deleteStmt.Table, deleteStmt.Where)
-	if err != nil {
-		t.Fatalf("Failed to delete data: %v", err)
-	}
+	assert.NoError(t, err, "Failed to delete data")
 
 	// Verify DELETE
 	results, err = store.Select("users", []string{"*"}, map[string]interface{}{"id": float64(1)})
-	if err != nil {
-		t.Fatalf("Failed to select after delete: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("Delete failed, still found %d results", len(results))
-	}
+	assert.NoError(t, err, "Failed to select after delete")
+	assert.Equal(t, 0, len(results), "Delete failed, still found results")
 }

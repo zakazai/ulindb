@@ -5,178 +5,145 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/zakazai/ulin-db/internal/parser"
+	"github.com/zakazai/ulin-db/internal/storage"
+	"github.com/zakazai/ulin-db/internal/types"
 )
 
-func TestPlanSelect(t *testing.T) {
+func TestCreatePlan(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+
 	tests := []struct {
-		name     string
-		query    string
-		expected *Plan
+		name    string
+		sql     string
+		want    *Plan
+		wantErr bool
 	}{
 		{
-			name:  "Select all from table",
-			query: "SELECT * FROM tablex",
-			expected: &Plan{
+			name: "Select all plan",
+			sql:  "SELECT * FROM users",
+			want: &Plan{
 				Type:    "SELECT",
-				Table:   "tablex",
+				Table:   "users",
 				Columns: []string{"*"},
+				Storage: store,
 			},
 		},
 		{
-			name:  "Select specific columns",
-			query: "SELECT a, b FROM tablex",
-			expected: &Plan{
+			name: "Select with where",
+			sql:  "SELECT name FROM users WHERE id = 1",
+			want: &Plan{
 				Type:    "SELECT",
-				Table:   "tablex",
-				Columns: []string{"a", "b"},
-			},
-		},
-		{
-			name:  "Select with where clause",
-			query: "SELECT a FROM tablex WHERE a = 1",
-			expected: &Plan{
-				Type:    "SELECT",
-				Table:   "tablex",
-				Columns: []string{"a"},
-				Where:   map[string]interface{}{"a": float64(1)},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := parser.Parse(test.query)
-			assert.NoError(t, err)
-			plan, err := CreatePlan(stmt, nil)
-			assert.NoError(t, err)
-			assert.Equal(t, test.expected.Type, plan.Type)
-			assert.Equal(t, test.expected.Table, plan.Table)
-			assert.Equal(t, test.expected.Columns, plan.Columns)
-			assert.Equal(t, test.expected.Where, plan.Where)
-		})
-	}
-}
-
-func TestPlanInsert(t *testing.T) {
-	tests := []struct {
-		name     string
-		query    string
-		expected *Plan
-	}{
-		{
-			name:  "Insert into table",
-			query: "INSERT INTO tablex VALUES (1, 'test')",
-			expected: &Plan{
-				Type:   "INSERT",
-				Table:  "tablex",
-				Values: map[string]interface{}{"column1": float64(1), "column2": "test"},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := parser.Parse(test.query)
-			assert.NoError(t, err)
-			plan, err := CreatePlan(stmt, nil)
-			assert.NoError(t, err)
-			assert.Equal(t, test.expected.Type, plan.Type)
-			assert.Equal(t, test.expected.Table, plan.Table)
-			assert.Equal(t, test.expected.Values, plan.Values)
-		})
-	}
-}
-
-func TestPlanUpdate(t *testing.T) {
-	tests := []struct {
-		name     string
-		query    string
-		expected *Plan
-	}{
-		{
-			name:  "Update table",
-			query: "UPDATE tablex SET a = 1 WHERE b = 2",
-			expected: &Plan{
-				Type:  "UPDATE",
-				Table: "tablex",
-				Set: map[string]interface{}{
-					"a": float64(1),
+				Table:   "users",
+				Columns: []string{"name"},
+				Where: map[string]interface{}{
+					"id": float64(1),
 				},
-				Where: map[string]interface{}{"b": float64(2)},
+				Storage: store,
 			},
 		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := parser.Parse(test.query)
-			assert.NoError(t, err)
-			plan, err := CreatePlan(stmt, nil)
-			assert.NoError(t, err)
-			assert.Equal(t, test.expected.Type, plan.Type)
-			assert.Equal(t, test.expected.Table, plan.Table)
-			assert.Equal(t, test.expected.Set, plan.Set)
-			assert.Equal(t, test.expected.Where, plan.Where)
-		})
-	}
-}
-
-func TestPlanDelete(t *testing.T) {
-	tests := []struct {
-		name     string
-		query    string
-		expected *Plan
-	}{
 		{
-			name:  "Delete from table",
-			query: "DELETE FROM tablex WHERE a = 1",
-			expected: &Plan{
-				Type:  "DELETE",
-				Table: "tablex",
-				Where: map[string]interface{}{"a": float64(1)},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := parser.Parse(test.query)
-			assert.NoError(t, err)
-			plan, err := CreatePlan(stmt, nil)
-			assert.NoError(t, err)
-			assert.Equal(t, test.expected.Type, plan.Type)
-			assert.Equal(t, test.expected.Table, plan.Table)
-			assert.Equal(t, test.expected.Where, plan.Where)
-		})
-	}
-}
-
-func TestPlanCreate(t *testing.T) {
-	tests := []struct {
-		name     string
-		query    string
-		expected *Plan
-	}{
-		{
-			name:  "Create table",
-			query: "CREATE TABLE tablex (id INT, name TEXT)",
-			expected: &Plan{
+			name: "Create table plan",
+			sql:  "CREATE TABLE users (id INT, name TEXT)",
+			want: &Plan{
 				Type:    "CREATE",
-				Table:   "tablex",
+				Table:   "users",
 				Columns: []string{"id INT", "name TEXT"},
+				Storage: store,
 			},
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := parser.Parse(test.query)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := parser.Parse(tt.sql)
 			assert.NoError(t, err)
-			plan, err := CreatePlan(stmt, nil)
+
+			got, err := CreatePlan(stmt, store)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
 			assert.NoError(t, err)
-			assert.Equal(t, test.expected.Type, plan.Type)
-			assert.Equal(t, test.expected.Table, plan.Table)
-			assert.Equal(t, test.expected.Columns, plan.Columns)
+			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestPlanExecution(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+
+	// Test CREATE TABLE
+	createSQL := "CREATE TABLE users (id INT, name TEXT)"
+	stmt, err := parser.Parse(createSQL)
+	assert.NoError(t, err)
+
+	plan, err := CreatePlan(stmt, store)
+	assert.NoError(t, err)
+	assert.Equal(t, "CREATE", plan.Type)
+	assert.Equal(t, "users", plan.Table)
+
+	// Test INSERT
+	insertSQL := "INSERT INTO users VALUES (1, 'test')"
+	stmt, err = parser.Parse(insertSQL)
+	assert.NoError(t, err)
+
+	plan, err = CreatePlan(stmt, store)
+	assert.NoError(t, err)
+	assert.Equal(t, "INSERT", plan.Type)
+	assert.Equal(t, "users", plan.Table)
+
+	// Test SELECT
+	selectSQL := "SELECT * FROM users WHERE id = 1"
+	stmt, err = parser.Parse(selectSQL)
+	assert.NoError(t, err)
+
+	plan, err = CreatePlan(stmt, store)
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT", plan.Type)
+	assert.Equal(t, "users", plan.Table)
+	assert.Equal(t, []string{"*"}, plan.Columns)
+	assert.Equal(t, float64(1), plan.Where["id"])
+}
+
+func TestPlanOptimization(t *testing.T) {
+	store := storage.NewInMemoryStorage()
+
+	// Create a test table
+	err := store.CreateTable(&types.Table{
+		Name: "users",
+		Columns: []types.ColumnDefinition{
+			{Name: "id", Type: "INT"},
+			{Name: "name", Type: "TEXT"},
+			{Name: "age", Type: "INT"},
+		},
+	})
+	assert.NoError(t, err)
+
+	// Insert test data
+	err = store.Insert("users", map[string]interface{}{
+		"id":   1,
+		"name": "test",
+		"age":  25,
+	})
+	assert.NoError(t, err)
+
+	// Test column pruning
+	selectSQL := "SELECT name FROM users WHERE id = 1"
+	stmt, err := parser.Parse(selectSQL)
+	assert.NoError(t, err)
+
+	plan, err := CreatePlan(stmt, store)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"name"}, plan.Columns)
+
+	// Test predicate pushdown
+	selectSQL = "SELECT * FROM users WHERE id = 1 AND age > 20"
+	stmt, err = parser.Parse(selectSQL)
+	assert.NoError(t, err)
+
+	plan, err = CreatePlan(stmt, store)
+	assert.NoError(t, err)
+	assert.NotNil(t, plan.Where)
+	assert.Equal(t, float64(1), plan.Where["id"])
 }

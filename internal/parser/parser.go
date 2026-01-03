@@ -9,185 +9,56 @@ import (
 	"github.com/zakazai/ulin-db/internal/types"
 )
 
-// Token types
-const (
-	TokenTypeKeyword    = "KEYWORD"
-	TokenTypeIdentifier = "IDENTIFIER"
-	TokenTypeString     = "STRING"
-	TokenTypeNumber     = "NUMBER"
-	TokenTypeSymbol     = "SYMBOL"
-)
-
-// Token represents a lexical token
-type Token struct {
-	Type  string
-	Value string
+// Statement types
+type Statement struct {
+	Type            string
+	SelectStatement *SelectStatement
+	InsertStatement *InsertStatement
+	UpdateStatement *UpdateStatement
+	DeleteStatement *DeleteStatement
+	CreateStatement *CreateStatement
+	Error           error
 }
 
-// Lexer represents a lexical analyzer
-type Lexer struct {
-	input string
-	pos   int
-}
-
-// NewLexer creates a new lexer
-func NewLexer(input string) *Lexer {
-	return &Lexer{
-		input: input,
-		pos:   0,
+func (stmt *Statement) Execute(s types.Storage) (interface{}, error) {
+	switch stmt.Type {
+	case "SELECT":
+		return stmt.SelectStatement.Execute(s)
+	case "INSERT":
+		return stmt.InsertStatement.Execute(s)
+	case "UPDATE":
+		return stmt.UpdateStatement.Execute(s)
+	case "DELETE":
+		return stmt.DeleteStatement.Execute(s)
+	case "CREATE":
+		return stmt.CreateStatement.Execute(s)
+	default:
+		return nil, fmt.Errorf("unsupported statement type: %s", stmt.Type)
 	}
 }
 
-// Lex tokenizes the input string
-func (l *Lexer) Lex() ([]Token, error) {
-	var tokens []Token
-	for l.pos < len(l.input) {
-		// Skip whitespace
-		if l.isWhitespace(l.current()) {
-			l.advance()
-			continue
-		}
-
-		// Handle identifiers and keywords
-		if l.isLetter(l.current()) {
-			token := l.lexIdentifier()
-			tokens = append(tokens, token)
-			continue
-		}
-
-		// Handle numbers
-		if l.isDigit(l.current()) {
-			token := l.lexNumber()
-			tokens = append(tokens, token)
-			continue
-		}
-
-		// Handle strings
-		if l.current() == '\'' || l.current() == '"' {
-			token, err := l.lexString()
-			if err != nil {
-				return nil, err
-			}
-			tokens = append(tokens, token)
-			continue
-		}
-
-		// Handle symbols
-		token := l.lexSymbol()
-		tokens = append(tokens, token)
-	}
-
-	return tokens, nil
-}
-
-func (l *Lexer) current() byte {
-	if l.pos >= len(l.input) {
-		return 0
-	}
-	return l.input[l.pos]
-}
-
-func (l *Lexer) advance() {
-	l.pos++
-}
-
-func (l *Lexer) isWhitespace(ch byte) bool {
-	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
-}
-
-func (l *Lexer) isLetter(ch byte) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
-}
-
-func (l *Lexer) isDigit(ch byte) bool {
-	return ch >= '0' && ch <= '9'
-}
-
-func (l *Lexer) lexIdentifier() Token {
-	start := l.pos
-	for l.pos < len(l.input) && (l.isLetter(l.current()) || l.isDigit(l.current())) {
-		l.advance()
-	}
-	value := l.input[start:l.pos]
-	tokenType := TokenTypeIdentifier
-
-	// Check if it's a keyword
-	switch strings.ToUpper(value) {
-	case "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
-		"DELETE", "CREATE", "TABLE", "INT", "STRING", "TEXT", "SHOW", "TABLES":
-		tokenType = TokenTypeKeyword
-	}
-
-	return Token{Type: tokenType, Value: value}
-}
-
-func (l *Lexer) lexNumber() Token {
-	start := l.pos
-	for l.pos < len(l.input) && (l.isDigit(l.current()) || l.current() == '.') {
-		l.advance()
-	}
-	return Token{Type: TokenTypeNumber, Value: l.input[start:l.pos]}
-}
-
-func (l *Lexer) lexString() (Token, error) {
-	quote := l.current()
-	l.advance() // Skip opening quote
-	start := l.pos
-
-	for l.pos < len(l.input) && l.current() != quote {
-		l.advance()
-	}
-
-	if l.pos >= len(l.input) {
-		return Token{}, fmt.Errorf("unterminated string")
-	}
-
-	value := l.input[start:l.pos]
-	l.advance() // Skip closing quote
-	return Token{Type: TokenTypeString, Value: value}, nil
-}
-
-func (l *Lexer) lexSymbol() Token {
-	ch := l.current()
-	l.advance()
-	return Token{Type: TokenTypeSymbol, Value: string(ch)}
-}
-
-type Statement interface {
-	Execute(storage types.Storage) (interface{}, error)
-}
-
-type BaseStatement struct {
-	Type string
-}
-
-// SelectStatement represents a SELECT SQL statement
 type SelectStatement struct {
 	Table   string
 	Columns []string
 	Where   map[string]interface{}
 }
 
-// InsertStatement represents an INSERT SQL statement
 type InsertStatement struct {
 	Table  string
 	Values map[string]interface{}
 }
 
-// UpdateStatement represents an UPDATE SQL statement
 type UpdateStatement struct {
 	Table string
 	Set   map[string]interface{}
 	Where map[string]interface{}
 }
 
-// DeleteStatement represents a DELETE SQL statement
 type DeleteStatement struct {
 	Table string
 	Where map[string]interface{}
 }
 
-// CreateStatement represents a CREATE TABLE SQL statement
 type CreateStatement struct {
 	Table   string
 	Columns []struct {
@@ -195,6 +66,16 @@ type CreateStatement struct {
 		Type     string
 		Nullable bool
 	}
+}
+
+type ColumnDefinition struct {
+	Name     string
+	Type     string
+	Nullable bool
+}
+
+type BaseStatement struct {
+	Type string
 }
 
 type ShowTablesStatement struct {
@@ -238,151 +119,122 @@ func (s *CreateStatement) Execute(storage types.Storage) (interface{}, error) {
 	})
 }
 
-// New creates a new parser with the given lexer
-func New(l *lexer.Lexer) *Parser {
-	return &Parser{l: l}
-}
-
 // Parser represents a SQL parser
 type Parser struct {
-	l *lexer.Lexer
+	l            *lexer.Lexer
+	currentToken lexer.Token
+	peekToken    lexer.Token
 }
 
-// Parse parses the input SQL statement
-func (p *Parser) Parse() (interface{}, error) {
-	tok := p.l.NextToken()
-	if tok.Type == lexer.EOF {
-		return nil, fmt.Errorf("empty statement")
-	}
+// New creates a new parser
+func New(l *lexer.Lexer) *Parser {
+	p := &Parser{l: l}
+	// Read two tokens, so currentToken and peekToken are both set
+	p.nextToken()
+	p.nextToken()
+	return p
+}
 
-	switch tok.Literal {
-	case "SELECT":
-		return p.parseSelect()
-	case "INSERT":
-		return p.parseInsert()
-	case "UPDATE":
-		return p.parseUpdate()
-	case "DELETE":
-		return p.parseDelete()
-	case "CREATE":
-		return p.parseCreate()
+func (p *Parser) nextToken() {
+	p.currentToken = p.peekToken
+	p.peekToken = p.l.NextToken()
+}
+
+// Parse parses a SQL statement and returns a Statement
+func Parse(sql string) (*Statement, error) {
+	l := lexer.New(sql)
+	p := New(l)
+	stmt := &Statement{}
+
+	switch p.currentToken.Type {
+	case lexer.KEYWORD:
+		switch p.currentToken.Literal {
+		case "SELECT":
+			stmt.Type = "SELECT"
+			selectStmt := p.parseSelect()
+			stmt.SelectStatement = &selectStmt
+		case "INSERT":
+			stmt.Type = "INSERT"
+			insertStmt, err := p.parseInsert()
+			if err != nil {
+				return nil, err
+			}
+			stmt.InsertStatement = insertStmt
+		case "UPDATE":
+			stmt.Type = "UPDATE"
+			updateStmt, err := p.parseUpdate()
+			if err != nil {
+				return nil, err
+			}
+			stmt.UpdateStatement = updateStmt
+		case "DELETE":
+			stmt.Type = "DELETE"
+			deleteStmt, err := p.parseDelete()
+			if err != nil {
+				return nil, err
+			}
+			stmt.DeleteStatement = deleteStmt
+		case "CREATE":
+			stmt.Type = "CREATE"
+			createStmt, err := p.parseCreate()
+			if err != nil {
+				return nil, err
+			}
+			stmt.CreateStatement = createStmt
+		default:
+			return nil, fmt.Errorf("unexpected keyword: %s", p.currentToken.Literal)
+		}
 	default:
-		return nil, fmt.Errorf("unsupported statement type: %s", tok.Literal)
+		return nil, fmt.Errorf("unexpected token type: %s", p.currentToken.Type)
 	}
+
+	return stmt, nil
 }
 
-func (p *Parser) parseSelect() (*SelectStatement, error) {
-	stmt := &SelectStatement{
-		Columns: []string{},
-	}
+func (p *Parser) parseSelect() SelectStatement {
+	stmt := SelectStatement{}
+	p.nextToken() // move past SELECT
 
 	// Parse columns
-	for {
-		tok := p.l.NextToken()
-		if tok.Type == lexer.EOF {
-			return nil, fmt.Errorf("unexpected EOF while parsing SELECT")
+	for p.currentToken.Type != lexer.KEYWORD || p.currentToken.Literal != "FROM" {
+		if p.currentToken.Type == lexer.ASTERISK {
+			stmt.Columns = append(stmt.Columns, "*")
+		} else if p.currentToken.Type == lexer.IDENTIFIER {
+			stmt.Columns = append(stmt.Columns, p.currentToken.Literal)
 		}
-
-		if tok.Type == lexer.ASTERISK {
-			stmt.Columns = []string{"*"}
-		} else if tok.Type == lexer.IDENTIFIER {
-			// Check for COUNT function
-			if strings.ToUpper(tok.Literal) == "COUNT" {
-				// Must be followed by a left parenthesis
-				leftParen := p.l.NextToken()
-				if leftParen.Type != lexer.LPAREN {
-					return nil, fmt.Errorf("expected ( after COUNT, got %s", leftParen.Literal)
-				}
-				
-				// Get the count column (usually *)
-				countArg := p.l.NextToken()
-				if countArg.Type != lexer.ASTERISK && countArg.Type != lexer.IDENTIFIER {
-					return nil, fmt.Errorf("expected column name or * inside COUNT(), got %s", countArg.Literal)
-				}
-				
-				// Must be followed by a right parenthesis
-				rightParen := p.l.NextToken()
-				if rightParen.Type != lexer.RPAREN {
-					return nil, fmt.Errorf("expected ) after COUNT argument, got %s", rightParen.Literal)
-				}
-				
-				// Add the COUNT function to columns
-				if countArg.Type == lexer.ASTERISK {
-					stmt.Columns = append(stmt.Columns, "COUNT(*)")
-				} else {
-					stmt.Columns = append(stmt.Columns, fmt.Sprintf("COUNT(%s)", countArg.Literal))
-				}
-			} else {
-				// Regular column name
-				stmt.Columns = append(stmt.Columns, tok.Literal)
-			}
-		}
-
-		tok = p.l.NextToken()
-		if tok.Type == lexer.EOF {
-			return nil, fmt.Errorf("unexpected EOF while parsing SELECT")
-		}
-
-		if tok.Literal == "FROM" {
-			break
-		} else if tok.Type != lexer.COMMA {
-			return nil, fmt.Errorf("expected comma or FROM, got %s", tok.Literal)
+		p.nextToken()
+		if p.currentToken.Type == lexer.COMMA {
+			p.nextToken()
 		}
 	}
 
-	// Parse table name
-	tok := p.l.NextToken()
-	if tok.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", tok.Literal)
-	}
-	stmt.Table = tok.Literal
-
-	// Parse WHERE clause if present
-	tok = p.l.NextToken()
-	if tok.Type == lexer.EOF {
-		return stmt, nil
+	// Parse FROM clause
+	if p.currentToken.Literal == "FROM" {
+		p.nextToken()
+		if p.currentToken.Type == lexer.IDENTIFIER {
+			stmt.Table = p.currentToken.Literal
+		}
+		p.nextToken()
 	}
 
-	if tok.Literal == "WHERE" {
+	// Parse WHERE clause
+	if p.currentToken.Type == lexer.KEYWORD && p.currentToken.Literal == "WHERE" {
+		p.nextToken()
 		where := make(map[string]interface{})
-		for {
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
-				break
+		for p.currentToken.Type != lexer.EOF {
+			col := p.currentToken.Literal
+			p.nextToken()
+			if p.currentToken.Type != lexer.EQUALS {
+				return stmt
 			}
-
-			if tok.Type != lexer.IDENTIFIER {
-				return nil, fmt.Errorf("expected column name, got %s", tok.Literal)
-			}
-			col := tok.Literal
-
-			tok = p.l.NextToken()
-			if tok.Type != lexer.EQUALS {
-				return nil, fmt.Errorf("expected =, got %s", tok.Literal)
-			}
-
-			tok = p.l.NextToken()
-			if tok.Type == lexer.NUMBER {
-				val, err := strconv.ParseFloat(tok.Literal, 64)
-				if err != nil {
-					return nil, fmt.Errorf("invalid number: %s", tok.Literal)
-				}
-				where[col] = val
-			} else if tok.Type == lexer.STRING {
-				where[col] = strings.Trim(tok.Literal, "'\"")
-			} else {
-				return nil, fmt.Errorf("expected number or string, got %s", tok.Literal)
-			}
-
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
-				break
-			}
+			p.nextToken()
+			where[col] = p.currentToken.Literal
+			p.nextToken()
 		}
 		stmt.Where = where
 	}
 
-	return stmt, nil
+	return stmt
 }
 
 func (p *Parser) parseInsert() (*InsertStatement, error) {
@@ -392,7 +244,7 @@ func (p *Parser) parseInsert() (*InsertStatement, error) {
 
 	// Parse INTO keyword
 	tok := p.l.NextToken()
-	if tok.Literal != "INTO" {
+	if strings.ToUpper(tok.Literal) != "INTO" {
 		return nil, fmt.Errorf("expected INTO, got %s", tok.Literal)
 	}
 
@@ -405,7 +257,7 @@ func (p *Parser) parseInsert() (*InsertStatement, error) {
 
 	// Parse VALUES keyword
 	tok = p.l.NextToken()
-	if tok.Literal != "VALUES" {
+	if strings.ToUpper(tok.Literal) != "VALUES" {
 		return nil, fmt.Errorf("expected VALUES, got %s", tok.Literal)
 	}
 
@@ -462,7 +314,7 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 
 	// Parse SET keyword
 	tok = p.l.NextToken()
-	if tok.Literal != "SET" {
+	if strings.ToUpper(tok.Literal) != "SET" {
 		return nil, fmt.Errorf("expected SET, got %s", tok.Literal)
 	}
 
@@ -500,7 +352,7 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 		if tok.Type == lexer.EOF {
 			break
 		}
-		if tok.Literal == "WHERE" {
+		if strings.ToUpper(tok.Literal) == "WHERE" {
 			break
 		}
 		if tok.Type != lexer.COMMA {
@@ -509,7 +361,7 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 	}
 
 	// Parse WHERE clause if present
-	if tok.Literal == "WHERE" {
+	if strings.ToUpper(tok.Literal) == "WHERE" {
 		where := make(map[string]interface{})
 		for {
 			tok = p.l.NextToken()
@@ -556,7 +408,7 @@ func (p *Parser) parseDelete() (*DeleteStatement, error) {
 
 	// Parse FROM keyword
 	tok := p.l.NextToken()
-	if tok.Literal != "FROM" {
+	if strings.ToUpper(tok.Literal) != "FROM" {
 		return nil, fmt.Errorf("expected FROM, got %s", tok.Literal)
 	}
 
@@ -573,7 +425,7 @@ func (p *Parser) parseDelete() (*DeleteStatement, error) {
 		return stmt, nil
 	}
 
-	if tok.Literal == "WHERE" {
+	if strings.ToUpper(tok.Literal) == "WHERE" {
 		where := make(map[string]interface{})
 		for {
 			tok = p.l.NextToken()
@@ -620,7 +472,7 @@ func (p *Parser) parseCreate() (*CreateStatement, error) {
 
 	// Parse TABLE keyword
 	tok := p.l.NextToken()
-	if tok.Literal != "TABLE" {
+	if strings.ToUpper(tok.Literal) != "TABLE" {
 		return nil, fmt.Errorf("expected TABLE, got %s", tok.Literal)
 	}
 
@@ -653,7 +505,8 @@ func (p *Parser) parseCreate() (*CreateStatement, error) {
 		if tok.Type != lexer.IDENTIFIER && tok.Type != lexer.KEYWORD {
 			return nil, fmt.Errorf("expected column type, got %s", tok.Literal)
 		}
-		colType := tok.Literal
+		// Normalize type name to uppercase for consistency
+		colType := strings.ToUpper(tok.Literal)
 
 		stmt.Columns = append(stmt.Columns, struct {
 			Name     string
@@ -675,15 +528,4 @@ func (p *Parser) parseCreate() (*CreateStatement, error) {
 	}
 
 	return stmt, nil
-}
-
-// Parse parses an SQL statement and returns a Statement
-func Parse(sql string) (Statement, error) {
-	l := lexer.New(sql)
-	p := New(l)
-	stmt, err := p.Parse()
-	if err != nil {
-		return nil, err
-	}
-	return stmt.(Statement), nil
 }
