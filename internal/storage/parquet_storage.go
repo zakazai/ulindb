@@ -22,14 +22,16 @@ type ParquetRow struct {
 	DataJSON  string `parquet:"name=data_json, type=BYTE_ARRAY, convertedtype=UTF8"`
 }
 
-// ParquetStorage implements Storage interface using Parquet file format
+// ParquetStorage implements Storage interface using Apache Parquet files
 type ParquetStorage struct {
-	dataDir       string
-	tables        map[string]*types.Table
-	mu            sync.RWMutex
-	syncFromBTree Storage // Reference to the BTree storage for syncing
-	lastSync      time.Time
-	syncInterval  time.Duration
+	baseDir      string
+	tables       map[string]*types.Table
+	mu           sync.RWMutex
+	btreeSource  *BTreeStorage
+	syncWorker   *time.Ticker
+	syncInterval time.Duration
+	stopSync     chan struct{}
+	lastSync     time.Time
 }
 
 // NewParquetStorage creates a new Parquet storage
@@ -40,87 +42,101 @@ func NewParquetStorage(dataDir string) (*ParquetStorage, error) {
 	}
 
 	return &ParquetStorage{
-		dataDir:      dataDir,
+		baseDir:      dataDir,
 		tables:       make(map[string]*types.Table),
 		syncInterval: 5 * time.Minute, // Default sync interval
 	}, nil
 }
 
 // SetBTreeSource sets the BTree storage to sync from
-func (s *ParquetStorage) SetBTreeSource(btree Storage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.syncFromBTree = btree
+func (s *ParquetStorage) SetBTreeSource(btree *BTreeStorage) {
+	s.btreeSource = btree
 }
 
 // SetSyncInterval sets the interval for automatic syncing
 func (s *ParquetStorage) SetSyncInterval(interval time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.syncInterval = interval
+	if s.syncWorker != nil {
+		s.syncWorker.Reset(interval)
+	}
 }
 
 // StartSyncWorker starts a background worker that periodically syncs data from BTree
 func (s *ParquetStorage) StartSyncWorker() {
+	if s.syncInterval == 0 {
+		s.syncInterval = 5 * time.Minute // Default sync interval
+	}
+
+	s.stopSync = make(chan struct{})
+	s.syncWorker = time.NewTicker(s.syncInterval)
+
 	go func() {
 		for {
-			time.Sleep(s.syncInterval)
-			if err := s.SyncFromBTree(); err != nil {
-				fmt.Printf("Error syncing from BTree: %v\n", err)
+			select {
+			case <-s.syncWorker.C:
+				if err := s.SyncFromBTree(); err != nil {
+					fmt.Printf("Warning: Parquet sync failed: %v\n", err)
+				}
+			case <-s.stopSync:
+				s.syncWorker.Stop()
+				return
 			}
 		}
 	}()
 }
 
+// StopSyncWorker stops the background sync worker
+func (s *ParquetStorage) StopSyncWorker() {
+	if s.stopSync != nil {
+		close(s.stopSync)
+	}
+	if s.syncWorker != nil {
+		s.syncWorker.Stop()
+	}
+}
+
 // SyncFromBTree synchronizes data from the BTree storage
 func (s *ParquetStorage) SyncFromBTree() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.syncFromBTree == nil {
+	if s.btreeSource == nil {
 		return fmt.Errorf("no BTree source configured")
 	}
 
-	// Get all tables from BTree
-	tables, err := s.syncFromBTree.ShowTables()
+	// Get list of tables from BTree
+	tables, err := s.btreeSource.ShowTables()
 	if err != nil {
-		return fmt.Errorf("failed to get tables from BTree: %w", err)
+		return fmt.Errorf("failed to get tables from BTree: %v", err)
 	}
 
-	// Sync each table
 	for _, tableName := range tables {
-		// Get table definition
-		table := s.syncFromBTree.GetTable(tableName)
+		// Get table schema
+		table := s.btreeSource.GetTable(tableName)
 		if table == nil {
 			continue
 		}
 
-		// Store table definition
-		s.tables[tableName] = table
-
 		// Get all rows from BTree
-		rows, err := s.syncFromBTree.Select(tableName, nil, nil)
+		rows, err := s.btreeSource.Select(tableName, []string{"*"}, nil)
 		if err != nil {
-			return fmt.Errorf("failed to select rows from BTree for table %s: %w", tableName, err)
+			fmt.Printf("Warning: Failed to sync table %s: %v\n", tableName, err)
+			continue
 		}
 
-		// Write to Parquet file
-		if err := s.writeRowsToParquet(tableName, rows); err != nil {
-			return fmt.Errorf("failed to write rows to Parquet for table %s: %w", tableName, err)
+		// Write to Parquet
+		if err := s.writeParquetFile(tableName, table, rows); err != nil {
+			fmt.Printf("Warning: Failed to write Parquet file for table %s: %v\n", tableName, err)
 		}
 	}
 
-	s.lastSync = time.Now()
 	return nil
 }
 
-func (s *ParquetStorage) writeRowsToParquet(tableName string, rows []types.Row) error {
+func (s *ParquetStorage) writeParquetFile(tableName string, table *types.Table, rows []types.Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
 	// Create Parquet file
-	filePath := filepath.Join(s.dataDir, fmt.Sprintf("%s.parquet", tableName))
+	filePath := filepath.Join(s.baseDir, fmt.Sprintf("%s.parquet", tableName))
 	fw, err := local.NewLocalFileWriter(filePath)
 	if err != nil {
 		return err
@@ -173,7 +189,7 @@ func (s *ParquetStorage) CreateTable(table *types.Table) error {
 	s.tables[table.Name] = table
 
 	// Create empty Parquet file for this table
-	return s.writeRowsToParquet(table.Name, []types.Row{})
+	return s.writeParquetFile(table.Name, table, []types.Row{})
 }
 
 // Insert implements Storage.Insert (but is read-only for Parquet)
@@ -193,11 +209,14 @@ func (s *ParquetStorage) Select(tableName string, columns []string, where map[st
 	}
 
 	// Read data from Parquet file
-	filePath := filepath.Join(s.dataDir, fmt.Sprintf("%s.parquet", tableName))
+	filePath := filepath.Join(s.baseDir, fmt.Sprintf("%s.parquet", tableName))
 	fr, err := local.NewLocalFileReader(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// If file doesn't exist, return empty result
+			// If file doesn't exist, return empty result or count=0
+			if len(columns) == 1 && columns[0] == "COUNT(*)" {
+				return []types.Row{{"count": 0}}, nil
+			}
 			return []types.Row{}, nil
 		}
 		return nil, err
@@ -216,6 +235,31 @@ func (s *ParquetStorage) Select(tableName string, columns []string, where map[st
 	parquetRows := make([]ParquetRow, numRows)
 	if err := pr.Read(&parquetRows); err != nil {
 		return nil, err
+	}
+
+	// Check for COUNT(*) aggregation
+	if len(columns) == 1 && columns[0] == "COUNT(*)" {
+		// Count matching rows
+		count := 0
+		for _, prow := range parquetRows {
+			// Skip rows that don't belong to this table
+			if prow.TableName != tableName {
+				continue
+			}
+
+			// Parse JSON data
+			var row types.Row
+			if err := json.Unmarshal([]byte(prow.DataJSON), &row); err != nil {
+				return nil, err
+			}
+
+			// Apply WHERE filter
+			if where == nil || s.matchesWhere(row, where) {
+				count++
+			}
+		}
+		// Return single row with count
+		return []types.Row{{"count": count}}, nil
 	}
 
 	// Convert to types.Row and apply filtering

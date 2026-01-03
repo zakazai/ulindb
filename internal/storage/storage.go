@@ -197,6 +197,19 @@ func (s *InMemoryStorage) Select(tableName string, columns []string, where map[s
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
+	// Check for COUNT(*) aggregation
+	if len(columns) == 1 && columns[0] == "COUNT(*)" {
+		// Count matching rows
+		count := 0
+		for _, row := range table.Rows {
+			if s.matchesWhere(row, where) {
+				count++
+			}
+		}
+		// Return single row with count
+		return []types.Row{{"count": count}}, nil
+	}
+
 	// Validate columns
 	if err := s.validateColumns(table, columns); err != nil {
 		return nil, err
@@ -219,12 +232,19 @@ func (s *InMemoryStorage) Select(tableName string, columns []string, where map[s
 			} else {
 				// Select specific columns
 				for _, col := range columns {
-					selectedRow[col] = row[col]
+					if val, ok := row[col]; ok {
+						selectedRow[col] = val
+					}
 				}
 			}
 			result = append(result, selectedRow)
 		}
 	}
+
+	if result == nil {
+		result = make([]types.Row, 0) // Return empty slice instead of nil
+	}
+
 	return result, nil
 }
 
@@ -576,6 +596,19 @@ func (s *JSONStorage) Select(tableName string, columns []string, where map[strin
 	table, exists := s.db.Tables[tableName]
 	if !exists {
 		return nil, fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	// Check for COUNT(*) aggregation
+	if len(columns) == 1 && columns[0] == "COUNT(*)" {
+		// Count matching rows
+		count := 0
+		for _, row := range table.Rows {
+			if s.matchesWhere(row, where) {
+				count++
+			}
+		}
+		// Return single row with count
+		return []types.Row{{"count": count}}, nil
 	}
 
 	// Validate columns
