@@ -3,75 +3,84 @@ package lexer
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
-// TokenType represents the type of a token
-type TokenType int
-
+// Token types
 const (
-	// EOF represents the end of file token
-	EOF TokenType = iota
-	// KEYWORD represents a keyword token
-	KEYWORD
-	// IDENTIFIER represents an identifier token
-	IDENTIFIER
-	// NUMBER represents a number token
-	NUMBER
-	// STRING represents a string token
-	STRING
-	// SYMBOL represents a symbol token
-	SYMBOL
-	// LPAREN represents a left parenthesis
-	LPAREN
-	// RPAREN represents a right parenthesis
-	RPAREN
-	// COMMA represents a comma
-	COMMA
-	// SEMICOLON represents a semicolon
-	SEMICOLON
-	// ASTERISK represents an asterisk
-	ASTERISK
-	// EQUALS represents an equals sign
-	EQUALS
+	ILLEGAL    = "ILLEGAL"
+	EOF        = "EOF"
+	KEYWORD    = "KEYWORD"
+	IDENTIFIER = "IDENTIFIER"
+	NUMBER     = "NUMBER"
+	STRING     = "STRING"
+	SYMBOL     = "SYMBOL"
+
+	// Symbols
+	ASTERISK  = "ASTERISK"
+	COMMA     = "COMMA"
+	SEMICOLON = "SEMICOLON"
+	LPAREN    = "LPAREN"
+	RPAREN    = "RPAREN"
+	EQUALS    = "EQUALS"
 )
 
-// Token represents a lexical token
+// Keywords
+var keywords = map[string]TokenType{
+	"select": KEYWORD,
+	"from":   KEYWORD,
+	"where":  KEYWORD,
+	"insert": KEYWORD,
+	"into":   KEYWORD,
+	"values": KEYWORD,
+	"update": KEYWORD,
+	"set":    KEYWORD,
+	"delete": KEYWORD,
+	"create": KEYWORD,
+	"table":  KEYWORD,
+	"int":    KEYWORD,
+	"text":   KEYWORD,
+	"string": KEYWORD,
+	"show":   KEYWORD,
+	"tables": KEYWORD,
+}
+
+type TokenType string
+
 type Token struct {
 	Type    TokenType
 	Literal string
+	Line    int
+	Col     int
 }
 
-// Lexer represents a lexical analyzer
-type Lexer struct {
-	input        string
-	position     int
-	readPosition int
-	ch           byte
+// LookupIdent checks if the given identifier is a keyword
+func LookupIdent(ident string) TokenType {
+	if tok, ok := keywords[strings.ToLower(ident)]; ok {
+		return tok
+	}
+	return IDENTIFIER
 }
 
-// New creates a new lexer with the given input
+// New creates a new Lexer for the input string
 func New(input string) *Lexer {
-	l := &Lexer{input: input}
+	l := &Lexer{
+		input:    input,
+		position: Position{Line: 1, Col: 0},
+	}
 	l.readChar()
 	return l
 }
 
-func (l *Lexer) readChar() {
-	if l.readPosition >= len(l.input) {
-		l.ch = 0
-	} else {
-		l.ch = l.input[l.readPosition]
-	}
-	l.position = l.readPosition
-	l.readPosition++
+type Position struct {
+	Line int
+	Col  int
 }
 
-func (l *Lexer) peekChar() byte {
-	if l.readPosition >= len(l.input) {
-		return 0
-	}
-	return l.input[l.readPosition]
+type Lexer struct {
+	input    string
+	position Position
+	readPos  int  // current reading position in input (after current char)
+	ch       byte // current char under examination
 }
 
 func (l *Lexer) NextToken() Token {
@@ -80,42 +89,35 @@ func (l *Lexer) NextToken() Token {
 	l.skipWhitespace()
 
 	switch l.ch {
-	case '(':
-		tok = Token{Type: LPAREN, Literal: string(l.ch)}
-	case ')':
-		tok = Token{Type: RPAREN, Literal: string(l.ch)}
+	case '*':
+		tok = Token{Type: ASTERISK, Literal: string(l.ch)}
 	case ',':
 		tok = Token{Type: COMMA, Literal: string(l.ch)}
 	case ';':
 		tok = Token{Type: SEMICOLON, Literal: string(l.ch)}
-	case '*':
-		tok = Token{Type: ASTERISK, Literal: string(l.ch)}
+	case '(':
+		tok = Token{Type: LPAREN, Literal: string(l.ch)}
+	case ')':
+		tok = Token{Type: RPAREN, Literal: string(l.ch)}
 	case '=':
 		tok = Token{Type: EQUALS, Literal: string(l.ch)}
+	case '\'':
+		tok.Type = STRING
+		tok.Literal = l.readString()
 	case 0:
-		tok = Token{Type: EOF, Literal: ""}
-	case '"', '\'':
-		quote := l.ch
-		l.readChar()
-		literal := l.readString(quote)
-		tok = Token{Type: STRING, Literal: fmt.Sprintf("%c%s%c", quote, literal, quote)}
+		tok.Literal = ""
+		tok.Type = EOF
 	default:
 		if isLetter(l.ch) {
 			tok.Literal = l.readIdentifier()
-			upperLiteral := strings.ToUpper(tok.Literal)
-			if isKeyword(upperLiteral) {
-				tok.Type = KEYWORD
-				tok.Literal = upperLiteral
-			} else {
-				tok.Type = IDENTIFIER
-			}
+			tok.Type = LookupIdent(tok.Literal)
 			return tok
-		} else if isDigit(l.ch) || l.ch == '-' {
-			tok.Type = NUMBER
+		} else if isDigit(l.ch) {
 			tok.Literal = l.readNumber()
+			tok.Type = NUMBER
 			return tok
 		} else {
-			tok = Token{Type: SYMBOL, Literal: string(l.ch)}
+			tok = Token{Type: ILLEGAL, Literal: string(l.ch)}
 		}
 	}
 
@@ -125,53 +127,57 @@ func (l *Lexer) NextToken() Token {
 
 func (l *Lexer) skipWhitespace() {
 	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+		if l.ch == '\n' {
+			l.position.Line++
+			l.position.Col = 0
+		}
 		l.readChar()
 	}
+}
+
+func (l *Lexer) readChar() {
+	if l.readPos >= len(l.input) {
+		l.ch = 0
+	} else {
+		l.ch = l.input[l.readPos]
+	}
+	l.position.Col++
+	l.readPos++
 }
 
 func (l *Lexer) readIdentifier() string {
-	position := l.position
-	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '_' {
+	position := l.readPos - 1
+	for isLetter(l.ch) || isDigit(l.ch) {
 		l.readChar()
 	}
-	return l.input[position:l.position]
+	return l.input[position : l.readPos-1]
 }
 
 func (l *Lexer) readNumber() string {
-	position := l.position
-	if l.ch == '-' {
+	position := l.readPos - 1
+	for isDigit(l.ch) {
 		l.readChar()
 	}
-	for isDigit(l.ch) || l.ch == '.' {
-		l.readChar()
-	}
-	return l.input[position:l.position]
+	return l.input[position : l.readPos-1]
 }
 
-func (l *Lexer) readString(quote byte) string {
-	position := l.position
+func (l *Lexer) readString() string {
+	position := l.readPos
 	for {
-		if l.ch == quote || l.ch == 0 {
+		l.readChar()
+		if l.ch == '\'' || l.ch == 0 {
 			break
 		}
-		if l.ch == '\\' {
-			l.readChar()
-			if l.ch == quote {
-				l.readChar()
-			}
-		} else {
-			l.readChar()
-		}
 	}
-	return l.input[position:l.position]
+	return l.input[position : l.readPos-1]
 }
 
 func isLetter(ch byte) bool {
-	return unicode.IsLetter(rune(ch))
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
 }
 
 func isDigit(ch byte) bool {
-	return unicode.IsDigit(rune(ch))
+	return '0' <= ch && ch <= '9'
 }
 
 func isKeyword(word string) bool {

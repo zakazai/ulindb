@@ -72,7 +72,7 @@ Use appropriate prefixes:
 ## SQL Support
 - Basic CRUD operations: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE
 - Basic WHERE clauses with equality conditions
-- Data types: INT, STRING, BOOL
+- Data types: INT, STRING/TEXT (both accepted, normalized to uppercase)
 - Aggregation functions:
   - `COUNT(*)` - Returns the count of rows in a table
 - Utility commands:
