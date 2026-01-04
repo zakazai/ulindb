@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
-	"github.com/zakazai/ulin-db/internal/lexer"
 	"github.com/zakazai/ulin-db/internal/parser"
 	"github.com/zakazai/ulin-db/internal/storage"
 	"github.com/zakazai/ulin-db/internal/types"
@@ -63,7 +61,7 @@ func main() {
 	types.GlobalLogger.Info("Hybrid storage initialized successfully")
 	types.GlobalLogger.Info("OLTP storage type: %T", hybridStorage.GetOLTPStorage())
 	types.GlobalLogger.Info("OLAP storage type: %T", hybridStorage.GetOLAPStorage())
-	
+
 	// User-facing info (always display)
 	fmt.Println("Hybrid storage initialized successfully")
 	fmt.Println("OLTP storage type:", fmt.Sprintf("%T", hybridStorage.GetOLTPStorage()))
@@ -176,33 +174,63 @@ func executeInteractiveMode(s *storage.HybridStorage) {
 
 // executePipedMode handles non-interactive mode with piped input
 func executePipedMode(s *storage.HybridStorage) {
-	reader := bufio.NewReader(os.Stdin)
-	buffer := ""
+	// Read all input at once
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+		return
+	}
 
-	// Read input line by line
-	for {
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				// Process any remaining commands at EOF
-				if strings.TrimSpace(buffer) != "" {
-					processCommand(s, buffer)
-				}
-				break
-			}
-			fmt.Printf("Error reading input: %v\n", err)
+	inputStr := string(input)
+
+	// Remove exit command
+	inputStr = strings.ReplaceAll(inputStr, "exit", "")
+	inputStr = strings.ReplaceAll(inputStr, "EXIT", "")
+	inputStr = strings.ReplaceAll(inputStr, "Exit", "")
+
+	// Split by semicolon to find statement boundaries
+	parts := strings.Split(inputStr, ";")
+
+	for _, part := range parts {
+		// Trim whitespace but preserve internal structure
+		stmt := strings.TrimSpace(part)
+		if stmt == "" {
 			continue
 		}
 
-		// Add the line to our buffer
-		buffer += input
+		// Replace newlines and tabs with spaces
+		stmt = strings.ReplaceAll(stmt, "\r\n", " ")
+		stmt = strings.ReplaceAll(stmt, "\n", " ")
+		stmt = strings.ReplaceAll(stmt, "\r", " ")
+		stmt = strings.ReplaceAll(stmt, "\t", " ")
 
-		// Check if the line contains a complete command (ends with semicolon)
-		trimmedLine := strings.TrimSpace(input)
-		if strings.HasSuffix(trimmedLine, ";") || strings.ToLower(trimmedLine) == "exit" {
-			processCommand(s, buffer)
-			buffer = ""
+		// Collapse multiple spaces but preserve single spaces between tokens
+		// This is critical - we need exactly one space between keywords and identifiers
+		oldStmt := ""
+		for oldStmt != stmt {
+			oldStmt = stmt
+			stmt = strings.ReplaceAll(stmt, "  ", " ")
 		}
+		stmt = strings.TrimSpace(stmt)
+
+		if stmt == "" {
+			continue
+		}
+
+		// Add semicolon back
+		if !strings.HasSuffix(stmt, ";") {
+			stmt = stmt + ";"
+		}
+
+		// Debug: Check if statement looks valid (for CREATE TABLE statements)
+		if strings.HasPrefix(strings.ToUpper(stmt), "CREATE") {
+			// Ensure there's a space after CREATE and before TABLE
+			stmt = strings.ReplaceAll(stmt, "CREATETABLE", "CREATE TABLE")
+			stmt = strings.ReplaceAll(stmt, "CREATE TABLE", "CREATE TABLE") // Ensure proper spacing
+		}
+
+		// Process the statement
+		processCommand(s, stmt)
 	}
 }
 
@@ -257,7 +285,7 @@ func processCommand(s *storage.HybridStorage, input string) {
 		}
 		return
 	}
-	
+
 	// Handle SHOW TABLE command to display the schema of a specific table
 	if strings.HasPrefix(strings.ToUpper(input), "SHOW TABLE ") {
 		// Extract the table name
@@ -266,25 +294,25 @@ func processCommand(s *storage.HybridStorage, input string) {
 			fmt.Println("Error: Invalid SHOW TABLE command. Usage: SHOW TABLE <table_name>;")
 			return
 		}
-		
+
 		tableName := strings.TrimSuffix(parts[2], ";")
 		fmt.Printf("Fetching schema for table '%s'...\n", tableName)
 		startTime := time.Now()
-		
+
 		// Get the table definition
 		table := s.GetTable(tableName)
 		duration := time.Since(startTime)
-		
+
 		if table == nil {
 			fmt.Printf("Error: Table '%s' does not exist\n", tableName)
 			return
 		}
-		
+
 		// Print table schema
 		fmt.Printf("Table: %s\n", table.Name)
 		fmt.Println("\nCOLUMN_NAME  | TYPE    | NULLABLE")
 		fmt.Println("-------------+---------+---------")
-		
+
 		for _, col := range table.Columns {
 			nullable := "YES"
 			if !col.Nullable {
@@ -292,7 +320,7 @@ func processCommand(s *storage.HybridStorage, input string) {
 			}
 			fmt.Printf("%-12s | %-7s | %s\n", col.Name, col.Type, nullable)
 		}
-		
+
 		fmt.Printf("\nSchema retrieved in %v\n", duration)
 		return
 	}
@@ -304,16 +332,15 @@ func processCommand(s *storage.HybridStorage, input string) {
 		fmt.Printf("Explaining query: %s\n", query)
 
 		// Parse the query
-		l := lexer.New(query)
-		p := parser.New(l)
-		stmt, err := p.Parse()
+		stmt, err := parser.Parse(query)
 		if err != nil {
 			fmt.Printf("Error parsing statement: %v\n", err)
 			return
 		}
 
 		// Only support EXPLAIN for SELECT statements
-		if selectStmt, ok := stmt.(*parser.SelectStatement); ok {
+		if stmt.SelectStatement != nil {
+			selectStmt := stmt.SelectStatement
 			isOLAP := storage.IsOLAPQuery(selectStmt.Columns, selectStmt.Where)
 			fmt.Println("======= Query Execution Plan =======")
 			fmt.Printf("Query Type: %s\n", map[bool]string{true: "OLAP (Analytical)", false: "OLTP (Transactional)"}[isOLAP])
@@ -336,25 +363,24 @@ func processCommand(s *storage.HybridStorage, input string) {
 	}
 
 	// Parse the SQL statement
-	l := lexer.New(input)
-	p := parser.New(l)
-	stmt, err := p.Parse()
+	stmt, err := parser.Parse(input)
 	if err != nil {
 		fmt.Printf("Error parsing statement: %v\n", err)
 		return
 	}
 
 	// Special handling for INSERT statements
-	if insertStmt, ok := stmt.(*parser.InsertStatement); ok {
+	if stmt.InsertStatement != nil {
+		insertStmt := stmt.InsertStatement
 		// Debug
 		fmt.Println("DEBUG: Executing INSERT Statement")
 		fmt.Printf("DEBUG: Table name = %s\n", insertStmt.Table)
 		fmt.Printf("DEBUG: Raw values = %v\n", insertStmt.Values)
-		
+
 		// Show all available tables
 		tables, _ := s.ShowTables()
 		fmt.Printf("DEBUG: Available tables = %v\n", tables)
-		
+
 		// Get the table definition to map column names
 		table := s.GetTable(insertStmt.Table)
 		if table == nil {
@@ -368,7 +394,7 @@ func processCommand(s *storage.HybridStorage, input string) {
 			}
 			return
 		}
-		
+
 		fmt.Printf("DEBUG: Table columns = %v\n", table.Columns)
 
 		// Map values to column names based on their position
@@ -402,19 +428,20 @@ func processCommand(s *storage.HybridStorage, input string) {
 	// Execute other statement types with timing
 	fmt.Printf("Executing statement...\n")
 	startTime := time.Now()
-	
+
 	// For SELECT statements, handle specially
-	if selectStmt, ok := stmt.(*parser.SelectStatement); ok {
+	if stmt.SelectStatement != nil {
+		selectStmt := stmt.SelectStatement
 		isOLAP := storage.IsOLAPQuery(selectStmt.Columns, selectStmt.Where)
 		storageType := "BTree (OLTP)"
 		if isOLAP {
 			storageType = "Parquet (OLAP)"
 		}
-		
+
 		// First always try OLTP storage directly for freshest data
 		fmt.Println("Always trying OLTP storage first for most up-to-date data...")
 		oltpRows, oltpErr := s.GetOLTPStorage().Select(selectStmt.Table, selectStmt.Columns, selectStmt.Where)
-		
+
 		if oltpErr == nil && len(oltpRows) > 0 {
 			// Found data in OLTP, display it
 			mapRows := make([]map[string]interface{}, len(oltpRows))
@@ -427,31 +454,31 @@ func processCommand(s *storage.HybridStorage, input string) {
 			fmt.Printf("Execution completed in %v\n", duration)
 			return
 		}
-		
+
 		// If OLTP storage returned no rows, continue with regular query
 		if oltpErr != nil {
 			fmt.Printf("OLTP storage error: %v\n", oltpErr)
 		} else {
 			fmt.Println("OLTP storage returned no rows, trying hybrid...")
 		}
-		
+
 		fmt.Printf("Query classified as %s, using %s storage\n",
 			map[bool]string{true: "analytical", false: "transactional"}[isOLAP],
 			storageType)
-		
+
 		// Execute the SELECT statement
-		result, err := stmt.(parser.Statement).Execute(s)
+		result, err := stmt.Execute(s)
 		duration := time.Since(startTime)
-		
+
 		if err != nil {
 			fmt.Printf("Error executing statement: %v\n", err)
 			return
 		}
-		
+
 		// For SELECT statements, also try to retrieve table directly to display rows
 		table := s.GetTable(selectStmt.Table)
 		rowsEmpty := true
-		
+
 		// Check if result set is empty
 		if result != nil {
 			if rows, ok := result.([]map[string]interface{}); ok {
@@ -468,10 +495,10 @@ func processCommand(s *storage.HybridStorage, input string) {
 				}
 			}
 		}
-		
+
 		// Print the result with timing information
 		fmt.Printf("Execution completed in %v\n", duration)
-		
+
 		// Display results or table schema
 		if rowsEmpty && table != nil {
 			// Try direct OLTP query to see what's there (diagnostic measure)
@@ -489,7 +516,7 @@ func processCommand(s *storage.HybridStorage, input string) {
 			} else {
 				fmt.Println("Direct OLTP query also returned no rows.")
 			}
-			
+
 			// If SELECT returned no results but table exists, provide some info about the table
 			fmt.Printf("Table '%s' exists but has no rows or no rows match your query.\n", selectStmt.Table)
 			fmt.Println("Table schema:")
@@ -507,14 +534,14 @@ func processCommand(s *storage.HybridStorage, input string) {
 		} else {
 			fmt.Println("Empty result set")
 		}
-		
+
 		return
 	}
-	
+
 	// For non-SELECT statements
-	result, err := stmt.(parser.Statement).Execute(s)
+	result, err := stmt.Execute(s)
 	duration := time.Since(startTime)
-	
+
 	if err != nil {
 		fmt.Printf("Error executing statement: %v\n", err)
 		return

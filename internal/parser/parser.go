@@ -222,14 +222,30 @@ func (p *Parser) parseSelect() SelectStatement {
 		p.nextToken()
 		where := make(map[string]interface{})
 		for p.currentToken.Type != lexer.EOF {
+			// Expect column name
+			if p.currentToken.Type != lexer.IDENTIFIER {
+				break
+			}
 			col := p.currentToken.Literal
 			p.nextToken()
 			if p.currentToken.Type != lexer.EQUALS {
-				return stmt
+				break
 			}
 			p.nextToken()
-			where[col] = p.currentToken.Literal
+			// Parse value according to token type
+			if p.currentToken.Type == lexer.NUMBER {
+				val, err := strconv.ParseFloat(p.currentToken.Literal, 64)
+				if err != nil {
+					break
+				}
+				where[col] = val
+			} else if p.currentToken.Type == lexer.STRING {
+				where[col] = strings.Trim(p.currentToken.Literal, "'\"")
+			} else {
+				where[col] = p.currentToken.Literal
+			}
 			p.nextToken()
+			// If next token is AND/OR or SEMICOLON, continue; otherwise loop will handle EOF
 		}
 		stmt.Where = where
 	}
@@ -242,58 +258,59 @@ func (p *Parser) parseInsert() (*InsertStatement, error) {
 		Values: make(map[string]interface{}),
 	}
 
-	// Parse INTO keyword
-	tok := p.l.NextToken()
+	// Parse INTO keyword - use peekToken which was already read by New()
+	tok := p.peekToken
+	p.nextToken() // Advance to consume the INTO token
 	if strings.ToUpper(tok.Literal) != "INTO" {
 		return nil, fmt.Errorf("expected INTO, got %s", tok.Literal)
 	}
 
 	// Parse table name
-	tok = p.l.NextToken()
-	if tok.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", tok.Literal)
+	p.nextToken()
+	if p.currentToken.Type != lexer.IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", p.currentToken.Literal)
 	}
-	stmt.Table = tok.Literal
+	stmt.Table = p.currentToken.Literal
 
 	// Parse VALUES keyword
-	tok = p.l.NextToken()
-	if strings.ToUpper(tok.Literal) != "VALUES" {
-		return nil, fmt.Errorf("expected VALUES, got %s", tok.Literal)
+	p.nextToken()
+	if strings.ToUpper(p.currentToken.Literal) != "VALUES" {
+		return nil, fmt.Errorf("expected VALUES, got %s", p.currentToken.Literal)
 	}
 
-	// Parse values
-	tok = p.l.NextToken()
-	if tok.Type != lexer.LPAREN {
-		return nil, fmt.Errorf("expected (, got %s", tok.Literal)
+	// Parse values (expect LPAREN)
+	p.nextToken()
+	if p.currentToken.Type != lexer.LPAREN {
+		return nil, fmt.Errorf("expected (, got %s", p.currentToken.Literal)
 	}
 
 	colIndex := 0
 	for {
-		tok = p.l.NextToken()
-		if tok.Type == lexer.RPAREN {
+		p.nextToken()
+		if p.currentToken.Type == lexer.RPAREN {
 			break
 		}
 
-		if tok.Type == lexer.NUMBER {
-			val, err := strconv.ParseFloat(tok.Literal, 64)
+		if p.currentToken.Type == lexer.NUMBER {
+			val, err := strconv.ParseFloat(p.currentToken.Literal, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid number: %s", tok.Literal)
+				return nil, fmt.Errorf("invalid number: %s", p.currentToken.Literal)
 			}
 			stmt.Values[fmt.Sprintf("column%d", colIndex+1)] = val
-		} else if tok.Type == lexer.STRING {
-			stmt.Values[fmt.Sprintf("column%d", colIndex+1)] = strings.Trim(tok.Literal, "'\"")
+		} else if p.currentToken.Type == lexer.STRING {
+			stmt.Values[fmt.Sprintf("column%d", colIndex+1)] = strings.Trim(p.currentToken.Literal, "'\"")
 		} else {
-			return nil, fmt.Errorf("expected number or string, got %s", tok.Literal)
+			return nil, fmt.Errorf("expected number or string, got %s", p.currentToken.Literal)
 		}
 
 		colIndex++
 
-		tok = p.l.NextToken()
-		if tok.Type == lexer.RPAREN {
+		p.nextToken()
+		if p.currentToken.Type == lexer.RPAREN {
 			break
 		}
-		if tok.Type != lexer.COMMA {
-			return nil, fmt.Errorf("expected comma or ), got %s", tok.Literal)
+		if p.currentToken.Type != lexer.COMMA {
+			return nil, fmt.Errorf("expected comma or ), got %s", p.currentToken.Literal)
 		}
 	}
 
@@ -306,94 +323,94 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 	}
 
 	// Parse table name
-	tok := p.l.NextToken()
-	if tok.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", tok.Literal)
+	p.nextToken()
+	if p.currentToken.Type != lexer.IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", p.currentToken.Literal)
 	}
-	stmt.Table = tok.Literal
+	stmt.Table = p.currentToken.Literal
 
 	// Parse SET keyword
-	tok = p.l.NextToken()
-	if strings.ToUpper(tok.Literal) != "SET" {
-		return nil, fmt.Errorf("expected SET, got %s", tok.Literal)
+	p.nextToken()
+	if strings.ToUpper(p.currentToken.Literal) != "SET" {
+		return nil, fmt.Errorf("expected SET, got %s", p.currentToken.Literal)
 	}
 
 	// Parse SET clause
 	for {
-		tok = p.l.NextToken()
-		if tok.Type == lexer.EOF {
+		p.nextToken()
+		if p.currentToken.Type == lexer.EOF {
 			break
 		}
 
-		if tok.Type != lexer.IDENTIFIER {
-			return nil, fmt.Errorf("expected column name, got %s", tok.Literal)
+		if p.currentToken.Type != lexer.IDENTIFIER {
+			return nil, fmt.Errorf("expected column name, got %s", p.currentToken.Literal)
 		}
-		col := tok.Literal
+		col := p.currentToken.Literal
 
-		tok = p.l.NextToken()
-		if tok.Type != lexer.EQUALS {
-			return nil, fmt.Errorf("expected =, got %s", tok.Literal)
+		p.nextToken()
+		if p.currentToken.Type != lexer.EQUALS {
+			return nil, fmt.Errorf("expected =, got %s", p.currentToken.Literal)
 		}
 
-		tok = p.l.NextToken()
-		if tok.Type == lexer.NUMBER {
-			val, err := strconv.ParseFloat(tok.Literal, 64)
+		p.nextToken()
+		if p.currentToken.Type == lexer.NUMBER {
+			val, err := strconv.ParseFloat(p.currentToken.Literal, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid number: %s", tok.Literal)
+				return nil, fmt.Errorf("invalid number: %s", p.currentToken.Literal)
 			}
 			stmt.Set[col] = val
-		} else if tok.Type == lexer.STRING {
-			stmt.Set[col] = strings.Trim(tok.Literal, "'\"")
+		} else if p.currentToken.Type == lexer.STRING {
+			stmt.Set[col] = strings.Trim(p.currentToken.Literal, "'\"")
 		} else {
-			return nil, fmt.Errorf("expected number or string, got %s", tok.Literal)
+			return nil, fmt.Errorf("expected number or string, got %s", p.currentToken.Literal)
 		}
 
-		tok = p.l.NextToken()
-		if tok.Type == lexer.EOF {
+		p.nextToken()
+		if p.currentToken.Type == lexer.EOF {
 			break
 		}
-		if strings.ToUpper(tok.Literal) == "WHERE" {
+		if strings.ToUpper(p.currentToken.Literal) == "WHERE" {
 			break
 		}
-		if tok.Type != lexer.COMMA {
-			return nil, fmt.Errorf("expected comma or WHERE, got %s", tok.Literal)
+		if p.currentToken.Type != lexer.COMMA {
+			return nil, fmt.Errorf("expected comma or WHERE, got %s", p.currentToken.Literal)
 		}
 	}
 
 	// Parse WHERE clause if present
-	if strings.ToUpper(tok.Literal) == "WHERE" {
+	if strings.ToUpper(p.currentToken.Literal) == "WHERE" {
 		where := make(map[string]interface{})
 		for {
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
+			p.nextToken()
+			if p.currentToken.Type == lexer.EOF {
 				break
 			}
 
-			if tok.Type != lexer.IDENTIFIER {
-				return nil, fmt.Errorf("expected column name, got %s", tok.Literal)
+			if p.currentToken.Type != lexer.IDENTIFIER {
+				return nil, fmt.Errorf("expected column name, got %s", p.currentToken.Literal)
 			}
-			col := tok.Literal
+			col := p.currentToken.Literal
 
-			tok = p.l.NextToken()
-			if tok.Type != lexer.EQUALS {
-				return nil, fmt.Errorf("expected =, got %s", tok.Literal)
+			p.nextToken()
+			if p.currentToken.Type != lexer.EQUALS {
+				return nil, fmt.Errorf("expected =, got %s", p.currentToken.Literal)
 			}
 
-			tok = p.l.NextToken()
-			if tok.Type == lexer.NUMBER {
-				val, err := strconv.ParseFloat(tok.Literal, 64)
+			p.nextToken()
+			if p.currentToken.Type == lexer.NUMBER {
+				val, err := strconv.ParseFloat(p.currentToken.Literal, 64)
 				if err != nil {
-					return nil, fmt.Errorf("invalid number: %s", tok.Literal)
+					return nil, fmt.Errorf("invalid number: %s", p.currentToken.Literal)
 				}
 				where[col] = val
-			} else if tok.Type == lexer.STRING {
-				where[col] = strings.Trim(tok.Literal, "'\"")
+			} else if p.currentToken.Type == lexer.STRING {
+				where[col] = strings.Trim(p.currentToken.Literal, "'\"")
 			} else {
-				return nil, fmt.Errorf("expected number or string, got %s", tok.Literal)
+				return nil, fmt.Errorf("expected number or string, got %s", p.currentToken.Literal)
 			}
 
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
+			p.nextToken()
+			if p.currentToken.Type == lexer.EOF {
 				break
 			}
 		}
@@ -407,57 +424,57 @@ func (p *Parser) parseDelete() (*DeleteStatement, error) {
 	stmt := &DeleteStatement{}
 
 	// Parse FROM keyword
-	tok := p.l.NextToken()
-	if strings.ToUpper(tok.Literal) != "FROM" {
-		return nil, fmt.Errorf("expected FROM, got %s", tok.Literal)
+	p.nextToken()
+	if strings.ToUpper(p.currentToken.Literal) != "FROM" {
+		return nil, fmt.Errorf("expected FROM, got %s", p.currentToken.Literal)
 	}
 
 	// Parse table name
-	tok = p.l.NextToken()
-	if tok.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", tok.Literal)
+	p.nextToken()
+	if p.currentToken.Type != lexer.IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", p.currentToken.Literal)
 	}
-	stmt.Table = tok.Literal
+	stmt.Table = p.currentToken.Literal
 
 	// Parse WHERE clause if present
-	tok = p.l.NextToken()
-	if tok.Type == lexer.EOF {
+	p.nextToken()
+	if p.currentToken.Type == lexer.EOF {
 		return stmt, nil
 	}
 
-	if strings.ToUpper(tok.Literal) == "WHERE" {
+	if strings.ToUpper(p.currentToken.Literal) == "WHERE" {
 		where := make(map[string]interface{})
 		for {
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
+			p.nextToken()
+			if p.currentToken.Type == lexer.EOF {
 				break
 			}
 
-			if tok.Type != lexer.IDENTIFIER {
-				return nil, fmt.Errorf("expected column name, got %s", tok.Literal)
+			if p.currentToken.Type != lexer.IDENTIFIER {
+				return nil, fmt.Errorf("expected column name, got %s", p.currentToken.Literal)
 			}
-			col := tok.Literal
+			col := p.currentToken.Literal
 
-			tok = p.l.NextToken()
-			if tok.Type != lexer.EQUALS {
-				return nil, fmt.Errorf("expected =, got %s", tok.Literal)
+			p.nextToken()
+			if p.currentToken.Type != lexer.EQUALS {
+				return nil, fmt.Errorf("expected =, got %s", p.currentToken.Literal)
 			}
 
-			tok = p.l.NextToken()
-			if tok.Type == lexer.NUMBER {
-				val, err := strconv.ParseFloat(tok.Literal, 64)
+			p.nextToken()
+			if p.currentToken.Type == lexer.NUMBER {
+				val, err := strconv.ParseFloat(p.currentToken.Literal, 64)
 				if err != nil {
-					return nil, fmt.Errorf("invalid number: %s", tok.Literal)
+					return nil, fmt.Errorf("invalid number: %s", p.currentToken.Literal)
 				}
 				where[col] = val
-			} else if tok.Type == lexer.STRING {
-				where[col] = strings.Trim(tok.Literal, "'\"")
+			} else if p.currentToken.Type == lexer.STRING {
+				where[col] = strings.Trim(p.currentToken.Literal, "'\"")
 			} else {
-				return nil, fmt.Errorf("expected number or string, got %s", tok.Literal)
+				return nil, fmt.Errorf("expected number or string, got %s", p.currentToken.Literal)
 			}
 
-			tok = p.l.NextToken()
-			if tok.Type == lexer.EOF {
+			p.nextToken()
+			if p.currentToken.Type == lexer.EOF {
 				break
 			}
 		}
@@ -470,43 +487,44 @@ func (p *Parser) parseDelete() (*DeleteStatement, error) {
 func (p *Parser) parseCreate() (*CreateStatement, error) {
 	stmt := &CreateStatement{}
 
-	// Parse TABLE keyword
-	tok := p.l.NextToken()
+	// Parse TABLE keyword - use peekToken which was already read by New()
+	tok := p.peekToken
+	p.nextToken() // Advance to consume the TABLE token
 	if strings.ToUpper(tok.Literal) != "TABLE" {
 		return nil, fmt.Errorf("expected TABLE, got %s", tok.Literal)
 	}
 
 	// Parse table name
-	tok = p.l.NextToken()
-	if tok.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", tok.Literal)
+	p.nextToken()
+	if p.currentToken.Type != lexer.IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", p.currentToken.Literal)
 	}
-	stmt.Table = tok.Literal
+	stmt.Table = p.currentToken.Literal
 
 	// Parse column definitions
-	tok = p.l.NextToken()
-	if tok.Type != lexer.LPAREN {
-		return nil, fmt.Errorf("expected (, got %s", tok.Literal)
+	p.nextToken()
+	if p.currentToken.Type != lexer.LPAREN {
+		return nil, fmt.Errorf("expected (, got %s", p.currentToken.Literal)
 	}
 
 	for {
-		tok = p.l.NextToken()
-		if tok.Type == lexer.RPAREN {
+		p.nextToken()
+		if p.currentToken.Type == lexer.RPAREN {
 			break
 		}
 
-		if tok.Type != lexer.IDENTIFIER {
-			return nil, fmt.Errorf("expected column name, got %s", tok.Literal)
+		if p.currentToken.Type != lexer.IDENTIFIER {
+			return nil, fmt.Errorf("expected column name, got %s", p.currentToken.Literal)
 		}
-		colName := tok.Literal
+		colName := p.currentToken.Literal
 
-		tok = p.l.NextToken()
+		p.nextToken()
 		// Accept both IDENTIFIER and KEYWORD as column types
-		if tok.Type != lexer.IDENTIFIER && tok.Type != lexer.KEYWORD {
-			return nil, fmt.Errorf("expected column type, got %s", tok.Literal)
+		if p.currentToken.Type != lexer.IDENTIFIER && p.currentToken.Type != lexer.KEYWORD {
+			return nil, fmt.Errorf("expected column type, got %s", p.currentToken.Literal)
 		}
 		// Normalize type name to uppercase for consistency
-		colType := strings.ToUpper(tok.Literal)
+		colType := strings.ToUpper(p.currentToken.Literal)
 
 		stmt.Columns = append(stmt.Columns, struct {
 			Name     string
@@ -518,12 +536,12 @@ func (p *Parser) parseCreate() (*CreateStatement, error) {
 			Nullable: true,
 		})
 
-		tok = p.l.NextToken()
-		if tok.Type == lexer.RPAREN {
+		p.nextToken()
+		if p.currentToken.Type == lexer.RPAREN {
 			break
 		}
-		if tok.Type != lexer.COMMA {
-			return nil, fmt.Errorf("expected comma or ), got %s", tok.Literal)
+		if p.currentToken.Type != lexer.COMMA {
+			return nil, fmt.Errorf("expected comma or ), got %s", p.currentToken.Literal)
 		}
 	}
 
